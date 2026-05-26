@@ -3939,22 +3939,35 @@ async function repairMailpoolSenderDelivery(input: {
     };
   }
 
-  const switched =
-    (await updateOutreachAccount(refreshed.id, {
-      status: "active",
-      config: {
-        mailbox: {
-          provider: refreshed.config.mailbox.provider === "gmail" ? "gmail" : refreshed.config.mailbox.provider,
-          deliveryMethod: "smtp",
-          status: "connected",
-          gmailUiLoginState: "unknown",
-          gmailUiLoginMessage:
-            "Autonomous repair switched this sender to Mailpool SMTP because Gmail UI delivery was not configured.",
-        },
+  const switched = await updateOutreachAccount(refreshed.id, {
+    status: "active",
+    config: {
+      mailbox: {
+        provider: refreshed.config.mailbox.provider === "gmail" ? "gmail" : refreshed.config.mailbox.provider,
+        deliveryMethod: "smtp",
+        status: "connected",
+        gmailUiLoginState: "unknown",
+        gmailUiLoginMessage:
+          "Autonomous repair switched this sender to Mailpool SMTP because Gmail UI delivery was not configured.",
       },
-      lastTestAt: nowIso(),
-      lastTestStatus: "pass",
-    })) ?? refreshed;
+    },
+    lastTestAt: nowIso(),
+    lastTestStatus: "pass",
+  });
+
+  if (!switched) {
+    throw new Error("Mailpool SMTP repair update did not persist.");
+  }
+
+  const switchedHasSmtp =
+    switched.status === "active" &&
+    switched.config.mailbox.deliveryMethod === "smtp" &&
+    Boolean(switched.config.mailbox.smtpHost.trim()) &&
+    Boolean(switched.config.mailbox.smtpUsername.trim());
+
+  if (!switchedHasSmtp) {
+    throw new Error("Mailpool SMTP repair update returned without an active SMTP delivery route.");
+  }
 
   return {
     dryRun: false,

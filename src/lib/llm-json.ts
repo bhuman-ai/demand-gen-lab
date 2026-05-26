@@ -175,18 +175,14 @@ function allowExpensiveOpenRouterModel() {
 
 function resolveOpenRouterModel(task: LlmTask, overrideModel?: string) {
   const explicitOverride = asString(overrideModel);
-  if (explicitOverride) {
-    return isGpt55Model(explicitOverride) && !allowExpensiveOpenRouterModel()
-      ? routineOpenRouterModel()
-      : explicitOverride;
-  }
+  if (explicitOverride) return explicitOverride;
 
-  const configured =
+  const taskConfigured =
     asString(process.env[openRouterTaskEnvKey(task)]) ||
-    (canUseHighIntelligenceModel(task) ? asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR) : "") ||
-    asString(process.env.OPENROUTER_MODEL_DEFAULT) ||
-    asString(process.env.OPENROUTER_MODEL);
+    (canUseHighIntelligenceModel(task) ? asString(process.env.OPENROUTER_MODEL_MISSION_OPERATOR) : "");
+  if (taskConfigured) return taskConfigured;
 
+  const configured = asString(process.env.OPENROUTER_MODEL_DEFAULT) || asString(process.env.OPENROUTER_MODEL);
   if (configured) {
     return isGpt55Model(configured) && !allowExpensiveOpenRouterModel() ? routineOpenRouterModel() : configured;
   }

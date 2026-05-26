@@ -403,25 +403,54 @@ export async function generateJsonWithLlm(input: {
   const provider = asString(process.env.LLM_JSON_PROVIDER).toLowerCase();
   const reasoningEffort = input.reasoningEffort || "high";
   if (provider === "openrouter") {
-    return callAndRecordLlmJson({
-      task: input.task,
-      provider: "openrouter",
-      expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
-      prompt: input.prompt,
-      format: input.format,
-      maxOutputTokens: input.maxOutputTokens,
-      reasoningEffort,
-      providerMode: provider,
-      attempt: "primary",
-      execute: () =>
-        callOpenRouterChat({
-          task: input.task,
+    try {
+      return await callAndRecordLlmJson({
+        task: input.task,
+        provider: "openrouter",
+        expectedModel: resolveOpenRouterModel(input.task, input.openRouterOverrideModel),
+        prompt: input.prompt,
+        format: input.format,
+        maxOutputTokens: input.maxOutputTokens,
+        reasoningEffort,
+        providerMode: provider,
+        attempt: "primary",
+        execute: () =>
+          callOpenRouterChat({
+            task: input.task,
+            prompt: input.prompt,
+            format: input.format,
+            maxOutputTokens: input.maxOutputTokens,
+            overrideModel: input.openRouterOverrideModel,
+          }),
+      });
+    } catch (openRouterError) {
+      if (!asString(process.env.OPENAI_API_KEY)) {
+        throw openRouterError;
+      }
+      return callAndRecordLlmJson({
+        task: input.task,
+        provider: "openai",
+        expectedModel: resolveLlmModel(input.task, {
           prompt: input.prompt,
-          format: input.format,
-          maxOutputTokens: input.maxOutputTokens,
-          overrideModel: input.openRouterOverrideModel,
+          overrideModel: input.openAiOverrideModel,
         }),
-    });
+        prompt: input.prompt,
+        format: input.format,
+        maxOutputTokens: input.maxOutputTokens,
+        reasoningEffort,
+        providerMode: provider,
+        attempt: "openrouter_failed_openai_fallback",
+        execute: () =>
+          callOpenAiResponses({
+            task: input.task,
+            prompt: input.prompt,
+            format: input.format,
+            maxOutputTokens: input.maxOutputTokens,
+            reasoningEffort,
+            overrideModel: input.openAiOverrideModel,
+          }),
+      });
+    }
   }
   if (provider === "openai") {
     return callAndRecordLlmJson({

@@ -38,6 +38,7 @@ export type OperatorToolName =
   | "get_sender_snapshot"
   | "inspect_outbound_blocker_chain"
   | "inspect_sender_delivery_evidence"
+  | "record_capability_gap"
   | "summarize_campaign_status"
   | "get_campaign_snapshot"
   | "summarize_experiments"
@@ -235,6 +236,7 @@ export type OperatorToolSpec = {
   riskLevel: OperatorRiskLevel;
   approvalMode: OperatorApprovalMode;
   description: string;
+  autonomyHint?: string;
   previewTitle: string;
   buildPreview?: (input: Record<string, unknown>) => Record<string, unknown>;
   run: (input: Record<string, unknown>) => Promise<OperatorToolResult>;

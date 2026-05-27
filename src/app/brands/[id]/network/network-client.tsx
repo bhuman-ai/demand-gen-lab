@@ -644,7 +644,12 @@ function senderActionPlan(
   const gmailUiLoginState = mailboxConfig
     ? String(mailboxConfig.gmailUiLoginState ?? mailboxConfig.gmail_ui_login_state ?? "").trim()
     : "";
-  const canVerifyViaGmailUi =
+  const hasMailpoolSmtpConfig = Boolean(
+    mailboxConfig &&
+      String(mailboxConfig.smtpHost ?? mailboxConfig.smtp_host ?? "").trim() &&
+      String(mailboxConfig.smtpUsername ?? mailboxConfig.smtp_username ?? "").trim()
+  );
+  const canUseInteractiveGmailVerify =
     Boolean(
       account &&
         account.provider === "mailpool" &&
@@ -654,70 +659,93 @@ function senderActionPlan(
         row.fromEmail &&
         row.dnsStatus === "verified"
     );
+  const needsHumanGmailLogin =
+    canUseInteractiveGmailVerify &&
+    deliveryMethod === "gmail_ui" &&
+    gmailUiLoginState !== "ready" &&
+    !hasMailpoolSmtpConfig;
+  const canRefreshMailpool =
+    Boolean(
+      account &&
+        account.provider === "mailpool" &&
+        account.accountType !== "mailbox" &&
+        row.fromEmail &&
+        !isMonitorInboxIssue(row)
+    );
   if (provisioning) {
     return {
       kind: "refresh_mailpool",
-      label: "Verify sender",
+      label: "Run check now",
       description: `${provisioning.detail} ${provisioning.etaLabel}`.trim(),
     };
   }
   if (!row.fromEmail) {
     return {
       kind: "open_setup",
-      label: "Verify sender",
+      label: "Attach sender",
       description: "Open the sender flow and attach the missing mailbox.",
     };
   }
-  if (
-    canVerifyViaGmailUi &&
-    (deliveryMethod === "gmail_ui" || deliveryMethod === "smtp" || !deliveryMethod) &&
-    gmailUiLoginState !== "ready"
-  ) {
+  if (canRefreshMailpool && deliveryMethod === "gmail_ui" && gmailUiLoginState !== "ready") {
+    return {
+      kind: "refresh_mailpool",
+      label: "Run check now",
+      description: "LastB2B can refresh Mailpool credentials and switch to SMTP automatically when available.",
+    };
+  }
+  if (needsHumanGmailLogin) {
     return {
       kind: "verify_gmail_ui",
-      label: "Verify sender",
-      description: "Open Google sign-in here and finish verification for this sender.",
+      label: "Finish Google login",
+      description: "Google is asking for a human login before this sender can use Gmail UI delivery.",
     };
   }
   if (row.provider === "mailpool" && row.dnsStatus !== "verified") {
     return {
       kind: "refresh_mailpool",
-      label: "Verify sender",
-      description: "Pull the latest domain and mailbox state from Mailpool.",
+      label: "Run check now",
+      description: "LastB2B will pull the latest domain and mailbox state automatically.",
     };
   }
   if (row.dnsStatus === "error") {
     return {
       kind: "repair_setup",
-      label: "Verify sender",
+      label: "Fix sender",
       description: "Repair sender DNS, forwarding, and connection settings for this domain.",
     };
   }
   if (row.dnsStatus !== "verified") {
     return {
       kind: "repair_setup",
-      label: "Verify sender",
+      label: "Run check now",
       description: "Re-run sender checks while this domain finishes verifying.",
     };
   }
   if (isMonitorInboxIssue(row)) {
     return {
       kind: "add_inbox",
-      label: "Verify sender",
+      label: "Add inbox",
       description: "Open the inbox flow and add 1 more reply inbox so checks can resume.",
     };
   }
   if (status === "fix" || health === "problem") {
-    if (canVerifyViaGmailUi) {
+    if (needsHumanGmailLogin) {
       return {
         kind: "verify_gmail_ui",
-        label: "Verify sender",
-        description: "Open Google sign-in here. If login is already done, finish the sender check from this panel.",
+        label: "Finish Google login",
+        description: "Google is asking for a human login before this sender can use Gmail UI delivery.",
+      };
+    }
+    if (canRefreshMailpool) {
+      return {
+        kind: "refresh_mailpool",
+        label: "Run check now",
+        description: "LastB2B will refresh credentials and sender health automatically.",
       };
     }
     return {
       kind: "open_settings",
-      label: "Verify sender",
+      label: "Review sender",
       description:
         readiness?.primaryBlockingReason ||
         "Open sender checks and review what is blocking readiness.",
@@ -1372,6 +1400,7 @@ export default function NetworkClient({
     gmailVerifyAccountId,
     gmailVerifyLoading,
     gmailVerifyOpen,
+    gmailVerifySession,
     gmailVerifySession?.loginState,
     gmailVerifySubmitting,
   ]);
@@ -1515,15 +1544,16 @@ export default function NetworkClient({
     try {
       const resolvedDeliveryAccount = resolveDeliveryAccountForRow(row);
       const resolvedDeliveryAccountId = resolvedDeliveryAccount?.id ?? resolveDeliveryAccountIdForRow(row);
-      const canOpenGmailVerify =
+      const canOpenInteractiveGmailVerify =
         Boolean(row.fromEmail) &&
         row.dnsStatus === "verified" &&
         !isMonitorInboxIssue(row) &&
         resolvedDeliveryAccount?.provider === "mailpool" &&
         resolvedDeliveryAccount.accountType !== "mailbox" &&
-        String(resolvedDeliveryAccount.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google";
+        String(resolvedDeliveryAccount.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google" &&
+        resolvedDeliveryAccount.config.mailbox.deliveryMethod === "gmail_ui";
 
-      if ((action.kind === "verify_gmail_ui" || action.kind === "open_settings") && canOpenGmailVerify) {
+      if (action.kind === "verify_gmail_ui" && canOpenInteractiveGmailVerify) {
         if (!resolvedDeliveryAccountId) {
           throw new Error("This Gmail UI sender is missing its delivery account link.");
         }
@@ -1565,7 +1595,7 @@ export default function NetworkClient({
         await refreshDomainsFromServer();
         updateSenderActionState(row.id, {
           pending: false,
-          success: "Verification refreshed. Pulled the latest Mailpool status for this sender.",
+          success: "Checked automatically. Updated this sender's credentials and health status.",
         });
         return;
       }
@@ -1915,7 +1945,11 @@ export default function NetworkClient({
               const warmupStage = senderWarmupStageLabel(item, capacity);
               const actionState = senderActionState[item.id] ?? EMPTY_SENDER_ACTION_STATE;
               const statusHeading = status === "fix" || status === "setup" ? "Issue" : "Status";
-              const nextStepHeading = action ? "Verify" : passiveAction?.heading ?? "Next step";
+              const nextStepHeading = action
+                ? action.kind === "verify_gmail_ui"
+                  ? "Needs login"
+                  : "Next step"
+                : passiveAction?.heading ?? "Next step";
               const outboundEnabled = isOutreachOutboundEnabled(account);
 
               return (
@@ -2001,7 +2035,7 @@ export default function NetworkClient({
                             ? "outline"
                             : action.kind === "add_inbox"
                               ? "default"
-                              : status === "fix"
+                              : action.kind === "verify_gmail_ui" && status === "fix"
                                 ? "danger"
                                 : "default"
                         }
@@ -2145,8 +2179,8 @@ export default function NetworkClient({
             }
           }
         }}
-        title={gmailVerifyRow?.fromEmail ? `Verify ${gmailVerifyRow.fromEmail}` : "Verify sender"}
-        description="One step at a time: we will tell you what Google is asking for, then finish the sender when the inbox is ready."
+        title={gmailVerifyRow?.fromEmail ? `Finish Google login for ${gmailVerifyRow.fromEmail}` : "Finish Google login"}
+        description="Only use this when Google asks for a human login. Normal Mailpool sender checks run automatically."
         panelClassName="max-w-3xl"
       >
         <div className="space-y-4">

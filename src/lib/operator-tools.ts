@@ -86,6 +86,7 @@ import {
   isOutreachOutboundEnabled,
 } from "@/lib/outreach-account-helpers";
 import { isDeliverabilitySeedSendingDisabledReason } from "@/lib/sender-health";
+import { readWarmupIntelligenceSnapshot } from "@/lib/warmup-intelligence";
 
 const RUN_OPEN_STATUSES = new Set([
   "queued",
@@ -1353,6 +1354,25 @@ const TOOL_SPECS: OperatorToolSpec[] = [
       "Use when the agent needs live deliverability proof before deciding whether to scale, switch transport, retry a sender, or keep volume low.",
     previewTitle: "Inspect sender delivery evidence",
     run: inspectSenderDeliveryEvidence,
+  },
+  {
+    name: "get_warmup_intelligence_snapshot",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Read the brand's warmup operating guide plus sender-level evidence for reply acquisition, inbox trust, exact-copy probe status, reply quality, and whether a sender is fresh, probing, recovering, or ready for tiny reply-focused outreach.",
+    autonomyHint:
+      "Use this before deciding warmup moves. It is evidence for agent reasoning, not a fixed playbook; choose the smallest legitimate action that should increase real replies or placement certainty.",
+    previewTitle: "Inspect warmup intelligence",
+    run: async (input) => {
+      const brandId = requireString(input, "brandId");
+      const snapshot = await readWarmupIntelligenceSnapshot(brandId);
+      const rollup = snapshot.evidence.rollup;
+      return {
+        summary: `${snapshot.evidence.brandName}: ${rollup.senderCount} warmup sender${rollup.senderCount === 1 ? "" : "s"}, best posture ${rollup.bestPosture}, ${rollup.totalWarmupReplies} warmup repl${rollup.totalWarmupReplies === 1 ? "y" : "ies"}, ${rollup.sendersNeedingProbe} needing probe, ${rollup.sendersInRecovery} in recovery.`,
+        result: snapshot as unknown as Record<string, unknown>,
+      } satisfies OperatorToolResult;
+    },
   },
   {
     name: "record_capability_gap",

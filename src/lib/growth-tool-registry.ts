@@ -50,6 +50,17 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     inputSchema: objectSchema({ accountId: stringProp("Sender account id") }, ["accountId"]),
   },
   {
+    name: "sender.warmup.snapshot",
+    operatorToolName: "get_warmup_intelligence_snapshot",
+    title: "Inspect warmup intelligence",
+    description:
+      "Read the warmup operating guide and sender evidence so the agent can decide legitimate reply-acquisition, inbox-trust, exact-copy probe, recovery, or tiny outreach moves.",
+    provider: "lastb2b",
+    category: "deliverability",
+    capability: "inspect_state",
+    inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
+  },
+  {
     name: "gmail_ui.account.observe",
     operatorToolName: "gmail_ui_observe_account",
     title: "Observe Gmail UI session",

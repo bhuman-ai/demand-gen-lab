@@ -1773,6 +1773,7 @@ function resolveSenderAccountId(
 const TOOLS_WITH_BRAND_CONTEXT = new Set<OperatorToolName>([
   "get_brand_snapshot",
   "inspect_outbound_blocker_chain",
+  "get_warmup_intelligence_snapshot",
   "summarize_campaign_status",
   "record_capability_gap",
   "request_user_attention",

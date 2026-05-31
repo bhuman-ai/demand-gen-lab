@@ -184,6 +184,23 @@ export type ProvisionSenderResult = {
   nextSteps: string[];
 };
 
+export type RegisterExistingSenderInput = {
+  brandId: string;
+  accountName?: string;
+  email: string;
+  assignToBrand?: boolean;
+  mailboxProvider?: "gmail" | "outlook" | "imap";
+  imapHost: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapPassword: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: boolean;
+  smtpUsername?: string;
+  smtpPassword?: string;
+};
+
 export type MailpoolDomainSelection = {
   domain: string;
   available: boolean;
@@ -279,6 +296,41 @@ function normalizeEmailLocalPart(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9._+-]/g, "")
     .replace(/^\.+|\.+$/g, "");
+}
+
+function normalizeExistingSenderEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function isValidExistingSenderEmail(value: string) {
+  return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(value.trim());
+}
+
+function normalizeMailboxProvider(
+  value: unknown,
+  email: string
+): NonNullable<RegisterExistingSenderInput["mailboxProvider"]> {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "gmail" || normalized === "outlook" || normalized === "imap") {
+    return normalized;
+  }
+  const domain = normalizeDomain(email.split("@")[1] ?? "");
+  if (["gmail.com", "googlemail.com"].includes(domain)) return "gmail";
+  if (["outlook.com", "hotmail.com", "live.com", "office365.com"].includes(domain)) return "outlook";
+  return "imap";
+}
+
+function cleanPort(value: unknown, fallback: number) {
+  const parsed = Math.round(Number(value ?? fallback) || fallback);
+  return Math.max(1, Math.min(65535, parsed));
+}
+
+function cleanBoolean(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "off"].includes(normalized)) return false;
+  return fallback;
 }
 
 function splitDomain(domain: string) {
@@ -1267,7 +1319,7 @@ async function bootstrapCustomerIoSender(input: {
   }
 }
 
-async function ensureCustomerIoDeliveryAccount(input: {
+export async function ensureCustomerIoDeliveryAccount(input: {
   accountName: string;
   siteId: string;
   workspaceId?: string;
@@ -1276,6 +1328,9 @@ async function ensureCustomerIoDeliveryAccount(input: {
   appApiKey?: string;
   fromEmail: string;
   replyToEmail: string;
+  mailboxAccount?: OutreachAccount | null;
+  outboundEnabled?: boolean;
+  outboundDisabledReason?: string;
 }) {
   const allAccounts = await listOutreachAccounts();
   const existing =
@@ -1286,12 +1341,23 @@ async function ensureCustomerIoDeliveryAccount(input: {
         account.config.customerIo.fromEmail.trim().toLowerCase() === input.fromEmail.trim().toLowerCase()
     ) ?? null;
 
+  const mailboxSecrets = input.mailboxAccount?.id
+    ? await getOutreachAccountSecrets(input.mailboxAccount.id)
+    : null;
+  const outboundEnabled = input.outboundEnabled !== false;
   const payload = {
     name: input.accountName.trim(),
     provider: "customerio" as const,
-    accountType: "delivery" as const,
+    accountType: input.mailboxAccount ? ("hybrid" as const) : ("delivery" as const),
     status: "active" as const,
     config: {
+      outbound: {
+        enabled: outboundEnabled,
+        disabledAt: outboundEnabled ? "" : nowIso(),
+        disabledReason: outboundEnabled
+          ? ""
+          : String(input.outboundDisabledReason ?? "Customer.io sender identity/DNS is not verified yet.").trim(),
+      },
       customerIo: {
         siteId: input.siteId.trim(),
         workspaceId: String(input.workspaceId ?? "").trim(),
@@ -1300,49 +1366,59 @@ async function ensureCustomerIoDeliveryAccount(input: {
         billing: sanitizeCustomerIoBillingConfig(input.billing),
       },
       mailpool: {
-        domainId: "",
-        mailboxId: "",
-        mailboxType: "google",
-        spamCheckId: "",
-        inboxPlacementId: "",
-        status: "pending",
-        lastSpamCheckAt: "",
-        lastSpamCheckScore: 0,
-        lastSpamCheckSummary: "",
+        domainId: input.mailboxAccount?.config.mailpool.domainId ?? "",
+        mailboxId: input.mailboxAccount?.config.mailpool.mailboxId ?? "",
+        mailboxType: input.mailboxAccount?.config.mailpool.mailboxType ?? "google",
+        spamCheckId: input.mailboxAccount?.config.mailpool.spamCheckId ?? "",
+        inboxPlacementId: input.mailboxAccount?.config.mailpool.inboxPlacementId ?? "",
+        status: input.mailboxAccount?.config.mailpool.status ?? "pending",
+        lastSpamCheckAt: input.mailboxAccount?.config.mailpool.lastSpamCheckAt ?? "",
+        lastSpamCheckScore: input.mailboxAccount?.config.mailpool.lastSpamCheckScore ?? 0,
+        lastSpamCheckSummary: input.mailboxAccount?.config.mailpool.lastSpamCheckSummary ?? "",
       },
       apify: {
         defaultActorId: "",
       },
       social: defaultSocialAccountConfig({ cooldownMinutes: 0 }),
       mailbox: {
-        provider: "imap",
-        deliveryMethod: "smtp",
-        email: "",
-        host: "",
-        port: 993,
-        secure: true,
-        smtpHost: "",
-        smtpPort: 587,
-        smtpSecure: false,
-        smtpUsername: "",
-        gmailUiUserDataDir: "",
-        gmailUiProfileDirectory: "",
-        gmailUiBrowserChannel: "chrome",
-        gmailUiLoginState: "unknown",
-        gmailUiLoginCheckedAt: "",
-        gmailUiLoginMessage: "",
-        proxyUrl: "",
-        proxyHost: "",
-        proxyPort: 0,
-        proxyUsername: "",
-        proxyPassword: "",
-        status: "disconnected",
+        provider: input.mailboxAccount?.config.mailbox.provider ?? "imap",
+        deliveryMethod: input.mailboxAccount?.config.mailbox.deliveryMethod ?? "smtp",
+        email: input.mailboxAccount?.config.mailbox.email ?? "",
+        host: input.mailboxAccount?.config.mailbox.host ?? "",
+        port: input.mailboxAccount?.config.mailbox.port ?? 993,
+        secure: input.mailboxAccount?.config.mailbox.secure ?? true,
+        smtpHost: input.mailboxAccount?.config.mailbox.smtpHost ?? "",
+        smtpPort: input.mailboxAccount?.config.mailbox.smtpPort ?? 587,
+        smtpSecure: input.mailboxAccount?.config.mailbox.smtpSecure ?? false,
+        smtpUsername: input.mailboxAccount?.config.mailbox.smtpUsername ?? "",
+        gmailUiUserDataDir: input.mailboxAccount?.config.mailbox.gmailUiUserDataDir ?? "",
+        gmailUiProfileDirectory: input.mailboxAccount?.config.mailbox.gmailUiProfileDirectory ?? "",
+        gmailUiBrowserChannel: input.mailboxAccount?.config.mailbox.gmailUiBrowserChannel ?? "chrome",
+        gmailUiLoginState: input.mailboxAccount?.config.mailbox.gmailUiLoginState ?? "unknown",
+        gmailUiLoginCheckedAt: input.mailboxAccount?.config.mailbox.gmailUiLoginCheckedAt ?? "",
+        gmailUiLoginMessage: input.mailboxAccount?.config.mailbox.gmailUiLoginMessage ?? "",
+        proxyUrl: input.mailboxAccount?.config.mailbox.proxyUrl ?? "",
+        proxyHost: input.mailboxAccount?.config.mailbox.proxyHost ?? "",
+        proxyPort: input.mailboxAccount?.config.mailbox.proxyPort ?? 0,
+        proxyUsername: input.mailboxAccount?.config.mailbox.proxyUsername ?? "",
+        proxyPassword: input.mailboxAccount?.config.mailbox.proxyPassword ?? "",
+        status: input.mailboxAccount?.config.mailbox.status ?? "disconnected",
       },
     },
     credentials: {
       customerIoApiKey: input.trackingApiKey.trim(),
       customerIoTrackApiKey: input.trackingApiKey.trim(),
       customerIoAppApiKey: String(input.appApiKey ?? "").trim(),
+      mailboxAccessToken: mailboxSecrets?.mailboxAccessToken ?? "",
+      mailboxRefreshToken: mailboxSecrets?.mailboxRefreshToken ?? "",
+      mailboxPassword: mailboxSecrets?.mailboxPassword ?? "",
+      mailboxAuthCode: mailboxSecrets?.mailboxAuthCode ?? "",
+      mailboxSmtpPassword: mailboxSecrets?.mailboxSmtpPassword ?? "",
+      mailboxAdminEmail: mailboxSecrets?.mailboxAdminEmail ?? "",
+      mailboxAdminPassword: mailboxSecrets?.mailboxAdminPassword ?? "",
+      mailboxAdminAuthCode: mailboxSecrets?.mailboxAdminAuthCode ?? "",
+      mailboxRecoveryEmail: mailboxSecrets?.mailboxRecoveryEmail ?? "",
+      mailboxRecoveryCodes: mailboxSecrets?.mailboxRecoveryCodes ?? "",
     } satisfies Partial<OutreachAccountSecrets>,
   };
 
@@ -1483,6 +1559,217 @@ async function ensureMailpoolHybridAccount(input: {
   return createOutreachAccount(payload);
 }
 
+export async function registerExistingSenderEmail(
+  input: RegisterExistingSenderInput
+): Promise<ProvisionSenderResult> {
+  const brand = await getBrandById(input.brandId);
+  if (!brand) {
+    throw new Error("Brand not found");
+  }
+
+  const fromEmail = normalizeExistingSenderEmail(input.email);
+  if (!isValidExistingSenderEmail(fromEmail)) {
+    throw new Error("Enter a valid email address.");
+  }
+
+  const domain = normalizeDomain(fromEmail.split("@")[1] ?? "");
+  if (!domain) {
+    throw new Error("Email domain is required.");
+  }
+
+  await assertBrandHasAutoAssignmentCapacity({
+    brandId: brand.id,
+    fromEmail,
+    assignToBrand: input.assignToBrand,
+  });
+
+  const imapHost = String(input.imapHost ?? "").trim();
+  const imapPassword = String(input.imapPassword ?? "").trim();
+  if (!imapHost || !imapPassword) {
+    throw new Error("IMAP host and mailbox password are required.");
+  }
+
+  const smtpHost = String(input.smtpHost ?? "").trim();
+  const smtpUsername = String(input.smtpUsername ?? "").trim() || fromEmail;
+  const smtpPassword = String(input.smtpPassword ?? "").trim() || imapPassword;
+  const hasSmtpRoute = Boolean(smtpHost && smtpUsername && smtpPassword);
+  const mailboxProvider = normalizeMailboxProvider(input.mailboxProvider, fromEmail);
+  const existing = (await listOutreachAccounts()).find(
+    (account) => getOutreachAccountFromEmail(account).trim().toLowerCase() === fromEmail
+  ) ?? null;
+  const now = nowIso();
+  const payload = {
+    name: String(input.accountName ?? "").trim() || `${brand.name} ${fromEmail}`,
+    provider: "mailpool" as const,
+    accountType: hasSmtpRoute ? ("hybrid" as const) : ("mailbox" as const),
+    status: "active" as const,
+    config: {
+      outbound: {
+        enabled: false,
+        disabledAt: now,
+        disabledReason:
+          "Existing email added. Agent must pass exact campaign-body seed placement before prospect sends.",
+      },
+      customerIo: {
+        siteId: "",
+        workspaceId: "",
+        fromEmail: "",
+        replyToEmail: fromEmail,
+        billing: sanitizeCustomerIoBillingConfig({}),
+      },
+      mailpool: {
+        domainId: "",
+        mailboxId: "",
+        mailboxType:
+          mailboxProvider === "gmail"
+            ? ("google" as const)
+            : mailboxProvider === "outlook"
+              ? ("outlook" as const)
+              : ("private" as const),
+        spamCheckId: "",
+        inboxPlacementId: "",
+        status: "active" as const,
+        lastSpamCheckAt: "",
+        lastSpamCheckScore: 0,
+        lastSpamCheckSummary: "",
+      },
+      apify: {
+        defaultActorId: "",
+      },
+      social: defaultSocialAccountConfig({ cooldownMinutes: 0 }),
+      mailbox: {
+        provider: mailboxProvider,
+        deliveryMethod: "smtp" as const,
+        email: fromEmail,
+        status: "connected" as const,
+        host: imapHost,
+        port: cleanPort(input.imapPort, 993),
+        secure: cleanBoolean(input.imapSecure, true),
+        smtpHost,
+        smtpPort: cleanPort(input.smtpPort, 587),
+        smtpSecure: cleanBoolean(input.smtpSecure, false),
+        smtpUsername,
+        gmailUiUserDataDir: "",
+        gmailUiProfileDirectory: "",
+        gmailUiBrowserChannel: "chrome",
+        gmailUiLoginState: "unknown" as const,
+        gmailUiLoginCheckedAt: "",
+        gmailUiLoginMessage: "",
+        proxyUrl: "",
+        proxyHost: "",
+        proxyPort: 0,
+        proxyUsername: "",
+        proxyPassword: "",
+      },
+    },
+    credentials: {
+      mailboxPassword: imapPassword,
+      mailboxSmtpPassword: hasSmtpRoute ? smtpPassword : "",
+    } satisfies Partial<OutreachAccountSecrets>,
+  };
+
+  let account = existing
+    ? (await updateOutreachAccount(existing.id, payload)) ?? existing
+    : await createOutreachAccount(payload);
+
+  const secrets = (await getOutreachAccountSecrets(account.id)) ?? {
+    customerIoApiKey: "",
+    customerIoTrackApiKey: "",
+    customerIoAppApiKey: "",
+    apifyToken: "",
+    youtubeClientId: "",
+    youtubeClientSecret: "",
+    youtubeRefreshToken: "",
+    mailboxAccessToken: "",
+    mailboxRefreshToken: "",
+    mailboxPassword: imapPassword,
+    mailboxAuthCode: "",
+    mailboxSmtpPassword: hasSmtpRoute ? smtpPassword : "",
+    mailboxAdminEmail: "",
+    mailboxAdminPassword: "",
+    mailboxAdminAuthCode: "",
+    mailboxRecoveryEmail: "",
+    mailboxRecoveryCodes: "",
+  };
+
+  const routeTest = await testOutreachProviders(account, secrets, hasSmtpRoute ? "customerio" : "mailbox").catch(
+    (error) => ({
+      ok: false,
+      scope: hasSmtpRoute ? ("customerio" as const) : ("mailbox" as const),
+      checks: {
+        customerIo: "fail" as const,
+        apify: "pass" as const,
+        mailbox: "fail" as const,
+      },
+      message: error instanceof Error ? error.message : "Existing email route test failed",
+    })
+  );
+  const testedAt = nowIso();
+  account =
+    (await updateOutreachAccount(account.id, {
+      lastTestAt: testedAt,
+      lastTestStatus: routeTest.ok ? "pass" : "fail",
+    })) ?? account;
+
+  const existingAssignment = await getBrandOutreachAssignment(brand.id);
+  const assignment =
+    input.assignToBrand === false
+      ? null
+      : await setBrandOutreachAssignment(brand.id, {
+          accountId: existingAssignment?.accountId || account.id,
+          accountIds: Array.from(new Set([...(existingAssignment?.accountIds ?? []), account.id])),
+          mailboxAccountId: account.id,
+        });
+
+  const nextDomains = updateBrandDomainRow({
+    brand,
+    domain,
+    fromEmail,
+    replyMailboxEmail: fromEmail,
+    dnsStatus: "configured",
+    forwardingTargetUrl: brand.website.trim(),
+    registrar: "manual",
+    provider: "manual",
+    deliveryAccountId: account.id,
+    deliveryAccountName: account.name,
+    notes:
+      "Existing mailbox added by the user. Agent should compare SMTP/native and Customer.io route candidates with seed-only tests before prospect sends.",
+  });
+  const updatedBrand = await updateBrand(brand.id, {
+    domains: nextDomains,
+  });
+
+  const warnings: string[] = [];
+  if (!hasSmtpRoute) {
+    warnings.push("SMTP was not configured, so this email is reply-only until a send route is added.");
+  }
+  if (!routeTest.ok) {
+    warnings.push(routeTest.message || "Existing email route check failed.");
+  }
+
+  return {
+    ok: true,
+    provider: "mailpool",
+    readyToSend: false,
+    domain,
+    fromEmail,
+    brand: updatedBrand ?? brand,
+    account,
+    assignment,
+    namecheap: undefined,
+    customerIo: undefined,
+    mailpool: undefined,
+    warnings,
+    nextSteps: [
+      routeTest.ok
+        ? "Agent can now run seed-only placement tests with the real campaign body."
+        : "Fix mailbox or SMTP login before route placement tests.",
+      "Keep prospect sending off until exact campaign-body seed placement passes.",
+      "If Customer.io is available, the agent should add this address there as a candidate route and test it against seeds too.",
+    ],
+  };
+}
+
 function updateBrandDomainRow(input: {
   brand: BrandRecord;
   domain: string;
@@ -1491,7 +1778,7 @@ function updateBrandDomainRow(input: {
   dnsStatus: DomainRow["dnsStatus"];
   forwardingTargetUrl: string;
   registrar: NonNullable<DomainRow["registrar"]>;
-  provider: NonNullable<Exclude<DomainRow["provider"], "manual">>;
+  provider: NonNullable<DomainRow["provider"]>;
   deliveryAccountId: string;
   deliveryAccountName: string;
   mailpoolDomainId?: string;
@@ -2498,6 +2785,9 @@ export async function provisionCustomerIoSender(
     });
   }
 
+  const customerIoRouteUsable = Boolean(
+    replyMailboxEmail && desiredDnsRecords.length && senderBootstrap.status !== "error"
+  );
   const account = await ensureCustomerIoDeliveryAccount({
     accountName: input.accountName.trim() || `${brand.name} ${domain}`,
     siteId: customerIoConnection.siteId,
@@ -2507,6 +2797,9 @@ export async function provisionCustomerIoSender(
     appApiKey: customerIoConnection.appApiKey,
     fromEmail,
     replyToEmail: replyMailboxEmail,
+    mailboxAccount,
+    outboundEnabled: customerIoRouteUsable,
+    outboundDisabledReason: "Customer.io sender identity/DNS is not verified yet.",
   });
 
   const assignment =
@@ -2607,7 +2900,7 @@ export async function provisionCustomerIoSender(
   return {
     ok: true,
     provider: "customerio",
-    readyToSend: Boolean(replyMailboxEmail && desiredDnsRecords.length && senderBootstrap.status !== "error"),
+    readyToSend: customerIoRouteUsable,
     domain,
     fromEmail,
     brand: updatedBrand ?? brand,

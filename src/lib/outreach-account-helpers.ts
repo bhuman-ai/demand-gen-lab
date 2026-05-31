@@ -68,7 +68,7 @@ export function isOutreachGmailUiLoginReady(account: Pick<OutreachAccount, "conf
 }
 
 export function isOutreachOutboundEnabled(account: Pick<OutreachAccount, "config"> | null | undefined) {
-  return account?.config.outbound?.enabled === true;
+  return account?.config.outbound?.enabled !== false;
 }
 
 export function getOutreachSenderBackingIssue(
@@ -122,20 +122,22 @@ export function supportsMailpoolDelivery(
   if (account.config.mailbox.deliveryMethod === "gmail_ui") {
     return supportsGmailUiDelivery(account);
   }
-  return (
-    Boolean(account.config.mailpool.mailboxId.trim()) &&
-    Boolean(account.config.mailbox.smtpHost.trim()) &&
-    Boolean(account.config.mailbox.smtpUsername.trim()) &&
-    Boolean(getOutreachAccountFromEmail(account)) &&
-    (!secrets || Boolean(secrets.mailboxSmtpPassword.trim() || secrets.mailboxPassword.trim()))
-  );
+  return supportsSmtpDelivery(account, secrets);
 }
 
 export function supportsSmtpDelivery(
   account: Pick<OutreachAccount, "provider" | "accountType" | "config">,
   secrets?: Pick<OutreachAccountSecrets, "mailboxPassword" | "mailboxSmtpPassword">
 ) {
-  return supportsMailpoolDelivery(account, secrets);
+  if (account.accountType === "mailbox" || account.config.mailbox.deliveryMethod === "gmail_ui") {
+    return false;
+  }
+  return (
+    Boolean(account.config.mailbox.smtpHost.trim()) &&
+    Boolean(account.config.mailbox.smtpUsername.trim()) &&
+    Boolean(getOutreachAccountFromEmail(account)) &&
+    (!secrets || Boolean(secrets.mailboxSmtpPassword.trim() || secrets.mailboxPassword.trim()))
+  );
 }
 
 export function supportsAnyDelivery(
@@ -145,11 +147,21 @@ export function supportsAnyDelivery(
   if (account.provider === "customerio") {
     return supportsCustomerIoDelivery(account) && (!secrets || Boolean(secrets.customerIoAppApiKey.trim()));
   }
-  return supportsMailpoolDelivery(account, secrets);
+  return supportsMailpoolDelivery(account, secrets) || supportsSmtpDelivery(account, secrets);
 }
 
-export function outreachProviderLabel(provider: Pick<OutreachAccount, "provider"> | OutreachAccount["provider"]) {
+export function outreachProviderLabel(
+  provider: (Pick<OutreachAccount, "provider"> & Partial<Pick<OutreachAccount, "config">>) | OutreachAccount["provider"]
+) {
   const value = typeof provider === "string" ? provider : provider.provider;
+  if (
+    typeof provider !== "string" &&
+    value === "mailpool" &&
+    provider.config &&
+    !provider.config.mailpool.mailboxId.trim()
+  ) {
+    return "SMTP";
+  }
   return value === "mailpool" ? "Mailpool" : "Customer.io";
 }
 

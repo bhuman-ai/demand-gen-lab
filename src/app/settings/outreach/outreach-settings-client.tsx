@@ -2,7 +2,7 @@
 
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useSearchParams } from "next/navigation";
-import { AlertCircle, ExternalLink, LoaderCircle, Plus, Sparkles } from "lucide-react";
+import { ExternalLink, LoaderCircle, Plus, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -540,6 +540,7 @@ export default function OutreachSettingsClient() {
   const [mailboxAuthMethod, setMailboxAuthMethod] = useState<MailboxAuthMethod>("app_password");
   const [showMailboxAdvanced, setShowMailboxAdvanced] = useState(false);
   const [showDeliveryAdvanced, setShowDeliveryAdvanced] = useState(false);
+  const [showSenderAdvanced, setShowSenderAdvanced] = useState(false);
   const [activeTab, setActiveTab] = useState<SetupTabId>("profile");
   const [deliveryModalOpen, setDeliveryModalOpen] = useState(false);
   const [mailboxModalOpen, setMailboxModalOpen] = useState(false);
@@ -805,16 +806,12 @@ export default function OutreachSettingsClient() {
 
     if (selectedBrand && !brandProfileReady) {
       setActiveTab("profile");
-    } else if (!providerDefaultsReady || !deliveryAccounts.length) {
-      setActiveTab("integrations");
-    } else if (!mailboxAccounts.length) {
-      setActiveTab("email");
     } else {
       setActiveTab("identity");
     }
 
     setAutoSelectedTab(true);
-  }, [autoSelectedTab, brandProfileReady, deliveryAccounts.length, loading, mailboxAccounts.length, providerDefaultsReady, selectedBrand]);
+  }, [autoSelectedTab, brandProfileReady, loading, selectedBrand]);
 
   function closeDeliveryModal() {
     setDeliveryModalOpen(false);
@@ -1227,8 +1224,6 @@ export default function OutreachSettingsClient() {
     () => scopedBrandReadiness.filter((row) => !row.ready),
     [scopedBrandReadiness]
   );
-  const selectedSenderCount = selectedBrandReadiness?.assignment.accountIds.length ?? 0;
-
   const profileStatus: SetupStepStatus =
     !selectedBrand
       ? "todo"
@@ -1267,16 +1262,6 @@ export default function OutreachSettingsClient() {
         : "complete"
       : "todo";
 
-  const identityPrerequisites = [
-    !selectedBrand ? "Pick the brand you want from the sidebar selector first." : "",
-    selectedBrand && !brandProfileReady ? "Write the brand brief first so experiment ideas have context." : "",
-    !providerDefaultsReady ? "Connect the delivery stack in Integrations first." : "",
-    selectedBrand && !selectedBrandSenderAccounts.length
-      ? `Add or provision at least one sender for ${selectedBrand.name}.`
-      : "",
-    !mailboxAccounts.length ? "Add at least one reply inbox in Email Accounts." : "",
-  ].filter(Boolean);
-
   const profileSummary = !selectedBrand
     ? "Pick a brand first"
     : brandProfileReady
@@ -1303,7 +1288,7 @@ export default function OutreachSettingsClient() {
         <div className="space-y-2">
           <div className="text-sm text-[color:var(--muted-foreground)]">
             {selectedBrand
-              ? `Set up ${selectedBrand.name}. Start with the brand brief, then connect the tools, add a reply inbox, and choose senders.`
+              ? `Set up ${selectedBrand.name}. Add one usable sender, then let the agent test it.`
               : "Pick a brand from the sidebar to start."}
           </div>
           <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -1313,19 +1298,11 @@ export default function OutreachSettingsClient() {
               selectedBrandReadiness?.ready ? "Ready to send" : selectedBrand ? "Setup incomplete" : "Choose brand"
             )}
             <div className="text-[color:var(--muted-foreground)]">
-              {selectedSenderCount} sender{selectedSenderCount === 1 ? "" : "s"} selected
+              Sender: {selectedBrandReadiness?.delivery?.name || "None"}
             </div>
             <div className="text-[color:var(--muted-foreground)]">
               Reply inbox: {selectedBrandReadiness?.mailbox?.name || "None"}
             </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm">
-          <div className="font-medium text-[color:var(--foreground)]">Setup order</div>
-          <div className="mt-1 text-[color:var(--muted-foreground)]">
-            1. Write the brand brief. 2. Connect the core tools. 3. Add the inbox that receives replies. 4. Choose
-            which senders belong to this brand.
           </div>
         </div>
 
@@ -1551,31 +1528,78 @@ export default function OutreachSettingsClient() {
                       <CardTitle className="text-base">Sender setup</CardTitle>
                       <CardDescription>
                         {selectedBrand
-                          ? `Choose which senders and reply inbox belong to ${selectedBrand.name}.`
-                          : "Pick a brand from the sidebar, then assign senders and a reply inbox."}
+                          ? `Get one sender ready for ${selectedBrand.name}.`
+                          : "Pick a brand from the sidebar, then add or choose a sender."}
                       </CardDescription>
                     </div>
                     {setupStatusBadge(identityStatus, identityStatus === "complete" ? "Ready to run" : undefined)}
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  {identityPrerequisites.length ? (
-                    <div className="rounded-xl border border-[color:var(--danger-border)] bg-[color:var(--danger-soft)] px-4 py-3">
-                      <div className="flex items-start gap-3">
-                        <AlertCircle className="mt-0.5 h-4 w-4 text-[color:var(--danger)]" />
-                        <div className="grid gap-1 text-sm text-[color:var(--danger)]">
-                          <div className="font-medium">Finish these first</div>
-                          {identityPrerequisites.map((item) => (
-                            <div key={item}>{item}</div>
-                          ))}
+                  {selectedBrandReadiness ? (
+                    (() => {
+                      const row = selectedBrandReadiness;
+                      const currentSenderEmail = row.delivery ? getOutreachAccountFromEmail(row.delivery) : "";
+                      const currentReplyEmail = row.mailbox?.config.mailbox.email?.trim() ?? "";
+
+                      return (
+                        <div className="grid gap-4">
+                          <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 md:grid-cols-[1fr_auto] md:items-center">
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-[color:var(--foreground)]">Current setup</div>
+                              <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                                Sender: {currentSenderEmail || row.delivery?.name || "None yet"}
+                              </div>
+                              <div className="mt-1 text-sm text-[color:var(--muted-foreground)]">
+                                Reply inbox: {currentReplyEmail || row.mailbox?.name || "None yet"}
+                              </div>
+                            </div>
+                            <div className="text-sm text-[color:var(--muted-foreground)]">
+                              {row.ready ? "Ready. The agent can keep testing and warming." : "Not ready. Add or choose a sender below."}
+                            </div>
+                          </div>
+
+                          {selectedBrandSenderAccounts.length ? (
+                            <div className="grid gap-2 md:max-w-xl">
+                              <Label htmlFor="existing-lastb2b-sender">Use a sender already in LastB2B</Label>
+                              <Select
+                                id="existing-lastb2b-sender"
+                                value={row.assignment.accountId}
+                                onChange={(event) => {
+                                  const accountId = event.target.value;
+                                  const selectedAccount =
+                                    selectedBrandSenderAccounts.find((account) => account.id === accountId) ?? null;
+                                  const nextMailboxAccountId =
+                                    row.assignment.mailboxAccountId ||
+                                    (selectedAccount && selectedAccount.accountType !== "delivery" ? accountId : "");
+
+                                  void onAssign(row.brand.id, {
+                                    accountId,
+                                    accountIds: accountId
+                                      ? Array.from(new Set([...row.assignment.accountIds, accountId]))
+                                      : row.assignment.accountIds,
+                                    mailboxAccountId: nextMailboxAccountId,
+                                  });
+                                }}
+                              >
+                                <option value="">Choose saved sender</option>
+                                {selectedBrandSenderAccounts.map((account) => (
+                                  <option key={account.id} value={account.id}>
+                                    {getOutreachAccountFromEmail(account) || account.name}
+                                  </option>
+                                ))}
+                              </Select>
+                              <div className="text-xs text-[color:var(--muted-foreground)]">
+                                Use this only if the sender already exists here. Otherwise add one below.
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
-                      </div>
-                    </div>
+                      );
+                    })()
                   ) : (
-                    <div className="grid gap-2 text-sm text-[color:var(--muted-foreground)] md:grid-cols-3">
-                      <div>Selected senders: {selectedSenderCount}</div>
-                      <div>Default sender: {selectedBrandReadiness?.delivery?.name || "None"}</div>
-                      <div>Reply inbox: {selectedBrandReadiness?.mailbox?.name || "None"}</div>
+                    <div className="rounded-xl border border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
+                      Pick a brand from the sidebar selector to configure senders and replies.
                     </div>
                   )}
                 </CardContent>
@@ -1583,6 +1607,7 @@ export default function OutreachSettingsClient() {
 
               {selectedBrand ? (
                 <SenderProvisionCard
+                  embedded
                   brands={scopedBrands}
                   allBrands={brands}
                   mailboxAccounts={mailboxAccounts}
@@ -1605,168 +1630,73 @@ export default function OutreachSettingsClient() {
                 />
               ) : null}
 
-              <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-base">Sending setup</CardTitle>
-                      <CardDescription>
-                        Choose which senders belong to this brand. One sender is the default, but all selected senders
-                        stay available for rotation.
-                      </CardDescription>
-                    </div>
-                    {setupStatusBadge(
-                      selectedBrandReadiness?.ready ? "complete" : selectedBrand ? "attention" : "todo",
-                      selectedBrandReadiness?.ready ? "Ready to run" : selectedBrand ? "Needs attention" : "No brand selected"
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  {selectedBrandReadiness ? (
-                    (() => {
-                      const row = selectedBrandReadiness;
-                      const assignedMailboxEmail = row.mailbox?.config.mailbox.email?.trim() ?? "";
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)]">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-medium"
+                  onClick={() => setShowSenderAdvanced((prev) => !prev)}
+                >
+                  <span>Advanced sender management</span>
+                  <span className="text-[color:var(--muted-foreground)]">
+                    {showSenderAdvanced ? "Hide" : "Show"}
+                  </span>
+                </button>
+                {showSenderAdvanced && selectedBrandReadiness ? (
+                  (() => {
+                    const row = selectedBrandReadiness;
+                    const assignedMailboxEmail = row.mailbox?.config.mailbox.email?.trim() ?? "";
 
-                      return (
-                        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_320px]">
-                          <div className="grid gap-2">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="text-sm font-medium">Senders for this brand</div>
-                              <div className="text-xs text-[color:var(--muted-foreground)]">
-                                {row.assignment.accountIds.length} selected
-                              </div>
-                            </div>
-                            {selectedBrandSenderAccounts.length ? (
-                              <div className="overflow-hidden rounded-xl border border-[color:var(--border)]">
-                                {selectedBrandSenderAccounts.map((account) => {
-                                  const checked = row.assignment.accountIds.includes(account.id);
-                                  const healthLabel =
-                                    account.lastTestStatus === "pass"
-                                      ? "Ready"
-                                      : account.lastTestStatus === "fail"
-                                        ? "Needs attention"
-                                        : "Not checked";
-                                  return (
-                                    <label
-                                      key={account.id}
-                                      className="flex items-start justify-between gap-3 border-t border-[color:var(--border)] px-4 py-3 first:border-t-0"
-                                    >
-                                      <div className="flex items-start gap-3">
-                                        <input
-                                          type="checkbox"
-                                          className="mt-1 h-4 w-4"
-                                          checked={checked}
-                                          onChange={(event) => {
-                                            const nextAccountIds = event.target.checked
-                                              ? [...row.assignment.accountIds, account.id]
-                                              : row.assignment.accountIds.filter((accountId) => accountId !== account.id);
-                                            const nextPrimary = nextAccountIds.includes(row.assignment.accountId)
-                                              ? row.assignment.accountId
-                                              : nextAccountIds[0] ?? "";
-                                            void onAssign(row.brand.id, {
-                                              accountId: nextPrimary,
-                                              accountIds: nextAccountIds,
-                                            });
-                                          }}
-                                        />
-                                        <div className="min-w-0">
-                                          <div className="font-medium">{account.name}</div>
-                                          <div className="text-xs text-[color:var(--muted-foreground)]">
-                                            {getOutreachAccountFromEmail(account) || "From address not set"}
-                                          </div>
-                                        </div>
-                                      </div>
-                                      <div className="text-xs text-[color:var(--muted-foreground)]">{healthLabel}</div>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <div className="rounded-xl border border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
-                                No senders belong to {row.brand.name} yet. Add or provision a sender for this brand in
-                                Connections.
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="grid gap-4">
-                            <div className="grid gap-2">
-                              <div className="text-sm font-medium">Default sender</div>
-                              <Select
-                                value={row.assignment.accountId}
-                                onChange={(event) =>
-                                  void onAssign(row.brand.id, {
-                                    accountId: event.target.value,
-                                    accountIds: row.assignment.accountIds,
-                                  })
-                                }
-                                disabled={!row.selectedSenders.length}
-                              >
-                                <option value="">Choose default sender</option>
-                                {row.selectedSenders.map((account) => (
-                                  <option key={account.id} value={account.id}>
-                                    {account.name}
-                                  </option>
-                                ))}
-                              </Select>
-                              <div className="text-xs text-[color:var(--muted-foreground)]">
-                                From: {(row.delivery ? getOutreachAccountFromEmail(row.delivery) : "") || "Not set"}
-                              </div>
-                            </div>
-
-                            <div className="grid gap-2">
-                              <div className="text-sm font-medium">Reply inbox</div>
-                              <Select
-                                value={row.assignment.mailboxAccountId}
-                                disabled={!row.assignment.accountIds.length}
-                                onChange={(event) => void onAssign(row.brand.id, { mailboxAccountId: event.target.value })}
-                              >
-                                <option value="">Choose reply inbox</option>
-                                {mailboxAccounts.map((account) => (
-                                  <option key={account.id} value={account.id}>
-                                    {account.name}
-                                  </option>
-                                ))}
-                              </Select>
-                              <div className="text-xs text-[color:var(--muted-foreground)]">
-                                Reply-To: {assignedMailboxEmail || "Not set"}
-                              </div>
-                            </div>
-
-                            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-[color:var(--muted-foreground)]">
-                              <div>Website: {row.brand.website || "Not set"}</div>
-                              <div className="mt-1">
-                                Sender check:{" "}
-                                {row.deliveryAssigned
-                                  ? row.deliveryPass
-                                    ? "Ready"
-                                    : row.deliveryTested
-                                      ? "Needs attention"
-                                      : "Not checked"
-                                  : "No sender selected"}
-                              </div>
-                              <div className="mt-1">
-                                Reply check:{" "}
-                                {row.mailboxAssigned
-                                  ? row.mailboxPass
-                                    ? "Ready"
-                                    : row.mailboxTested
-                                      ? "Needs attention"
-                                      : "Not checked"
-                                  : "No reply inbox selected"}
-                              </div>
-                            </div>
+                    return (
+                      <div className="grid gap-4 border-t border-[color:var(--border)] p-4 md:grid-cols-2">
+                        <div className="grid gap-2">
+                          <Label htmlFor="advanced-default-sender">Default sender</Label>
+                          <Select
+                            id="advanced-default-sender"
+                            value={row.assignment.accountId}
+                            onChange={(event) =>
+                              void onAssign(row.brand.id, {
+                                accountId: event.target.value,
+                                accountIds: row.assignment.accountIds,
+                              })
+                            }
+                            disabled={!row.selectedSenders.length}
+                          >
+                            <option value="">Choose default sender</option>
+                            {row.selectedSenders.map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.name}
+                              </option>
+                            ))}
+                          </Select>
+                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                            From: {(row.delivery ? getOutreachAccountFromEmail(row.delivery) : "") || "Not set"}
                           </div>
                         </div>
-                      );
-                    })()
-                  ) : (
-                    <div className="rounded-xl border border-[color:var(--border)] px-4 py-4 text-sm text-[color:var(--muted-foreground)]">
-                      Pick a brand from the sidebar selector to configure senders and replies.
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+
+                        <div className="grid gap-2">
+                          <Label htmlFor="advanced-reply-inbox">Reply inbox</Label>
+                          <Select
+                            id="advanced-reply-inbox"
+                            value={row.assignment.mailboxAccountId}
+                            disabled={!row.assignment.accountIds.length}
+                            onChange={(event) => void onAssign(row.brand.id, { mailboxAccountId: event.target.value })}
+                          >
+                            <option value="">Choose reply inbox</option>
+                            {mailboxAccounts.map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.name}
+                              </option>
+                            ))}
+                          </Select>
+                          <div className="text-xs text-[color:var(--muted-foreground)]">
+                            Reply-To: {assignedMailboxEmail || "Not set"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : null}
+              </div>
             </>
           ) : null}
 

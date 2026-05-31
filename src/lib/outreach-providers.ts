@@ -13,6 +13,7 @@ import {
   getOutreachAccountReplyToEmail,
   supportsGmailUiDelivery,
   supportsMailpoolDelivery,
+  supportsSmtpDelivery,
 } from "@/lib/outreach-account-helpers";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
 import { validateGmailUiMailboxConfig } from "@/lib/gmail-ui-delivery";
@@ -3314,10 +3315,18 @@ export async function testOutreachProviders(
   const fromEmail = getOutreachAccountFromEmail(account).trim();
   const trackingApiKey = customerIoTrackApiKey(secrets);
   const appApiKey = customerIoAppApiKey(secrets);
+  const deliveryRouteLabel =
+    account.provider === "customerio"
+      ? "Customer.io"
+      : account.config.mailbox.deliveryMethod === "gmail_ui"
+        ? "Gmail UI"
+        : account.config.mailpool.mailboxId.trim()
+          ? "Mailpool SMTP"
+          : "SMTP";
   const rawCustomerIoPass = requiresDelivery
     ? account.provider === "customerio"
       ? Boolean(account.config.customerIo.siteId && trackingApiKey && appApiKey && fromEmail)
-      : supportsMailpoolDelivery(account, secrets)
+      : supportsSmtpDelivery(account, secrets) || supportsMailpoolDelivery(account, secrets)
     : true;
 
   const rawSourcingPass = true;
@@ -3351,7 +3360,7 @@ export async function testOutreachProviders(
             ? `Missing: ${missing.join(", ")}`
             : account.config.mailbox.deliveryMethod === "gmail_ui"
               ? "Gmail UI config missing"
-              : "Mailpool SMTP config missing";
+              : `${deliveryRouteLabel} config missing`;
       }
       customerIoPass = false;
     } else if (account.provider === "customerio") {
@@ -3409,7 +3418,7 @@ export async function testOutreachProviders(
         customerIoDetail = `SMTP verified at ${account.config.mailbox.smtpHost.trim()}`;
       } catch (error) {
         customerIoPass = false;
-        customerIoDetail = error instanceof Error ? error.message : "Mailpool SMTP verification failed";
+        customerIoDetail = error instanceof Error ? error.message : "SMTP verification failed";
       }
     }
   }
@@ -3421,11 +3430,11 @@ export async function testOutreachProviders(
     scope === "customerio"
       ? customerIoPass
         ? customerIoDetail
-          ? `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check passed. ${customerIoDetail}`
-          : `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check passed`
+          ? `${deliveryRouteLabel} check passed. ${customerIoDetail}`
+          : `${deliveryRouteLabel} check passed`
         : customerIoDetail
-          ? `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check failed. ${customerIoDetail}`
-          : `${account.provider === "customerio" ? "Customer.io" : "Mailpool"} check failed`
+          ? `${deliveryRouteLabel} check failed. ${customerIoDetail}`
+          : `${deliveryRouteLabel} check failed`
       : scope === "mailbox"
         ? mailboxPass
           ? "Mailbox check passed"
@@ -3589,6 +3598,17 @@ async function sendCustomerIoTransactionalEmail(params: {
     };
   }
 
+  const simulate = ["1", "true", "yes", "on"].includes(
+    String(process.env.CUSTOMER_IO_SIMULATE ?? "").trim().toLowerCase()
+  );
+  if (simulate) {
+    return {
+      ok: true,
+      providerMessageId: `sim_${Date.now().toString(36)}`,
+      error: "",
+    };
+  }
+
   const basePayload = {
     to: normalizedRecipient,
     from: normalizedFromEmail,
@@ -3678,7 +3698,7 @@ async function sendCustomerIoTransactionalEmail(params: {
   };
 }
 
-async function sendMailpoolSmtpEmail(params: {
+async function sendSmtpEmail(params: {
   account: OutreachAccount;
   secrets: OutreachAccountSecrets;
   recipient: string;
@@ -3699,14 +3719,14 @@ async function sendMailpoolSmtpEmail(params: {
     return {
       ok: false,
       providerMessageId: "",
-      error: "Mailpool SMTP credentials are incomplete",
+      error: "SMTP credentials are incomplete",
     };
   }
   if (!recipient || !fromEmail || !replyToEmail || !subject || !body) {
     return {
       ok: false,
       providerMessageId: "",
-      error: "Mailpool SMTP payload is incomplete",
+      error: "SMTP payload is incomplete",
     };
   }
 
@@ -3737,7 +3757,7 @@ async function sendMailpoolSmtpEmail(params: {
     return {
       ok: false,
       providerMessageId: "",
-      error: error instanceof Error ? error.message : "Mailpool SMTP send failed",
+      error: error instanceof Error ? error.message : "SMTP send failed",
     };
   }
 }
@@ -3798,18 +3818,25 @@ async function sendDeliveryEmail(params: {
   body: string;
   metadata?: Record<string, unknown>;
 }) {
-  if (params.account.provider === "mailpool") {
-    if (params.account.config.mailbox.deliveryMethod === "gmail_ui" && !supportsGmailUiDelivery(params.account)) {
+  if (params.account.config.mailbox.deliveryMethod === "gmail_ui" || supportsGmailUiDelivery(params.account)) {
+    if (!supportsGmailUiDelivery(params.account)) {
       return {
         ok: false,
         providerMessageId: "",
         error: "Gmail UI delivery is selected but the Gmail UI profile is not fully configured.",
       };
     }
-    if (supportsGmailUiDelivery(params.account)) {
-      return sendMailpoolGmailUiEmail(params);
-    }
-    return sendMailpoolSmtpEmail(params);
+    return sendMailpoolGmailUiEmail(params);
+  }
+  if (supportsSmtpDelivery(params.account, params.secrets)) {
+    return sendSmtpEmail(params);
+  }
+  if (params.account.provider !== "customerio") {
+    return {
+      ok: false,
+      providerMessageId: "",
+      error: "SMTP delivery is selected but the SMTP route is not fully configured.",
+    };
   }
   return sendCustomerIoTransactionalEmail(params);
 }

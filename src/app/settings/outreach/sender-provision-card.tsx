@@ -12,6 +12,8 @@ import {
   fetchSavedMailpoolDomains,
   fetchSavedNamecheapDomains,
   provisionSenderDomain,
+  registerExistingSenderEmail,
+  type SenderProvisionResult,
 } from "@/lib/client-api";
 import {
   buildCustomerIoCapacityPools,
@@ -29,10 +31,10 @@ type AssignmentMap = Record<
   }
 >;
 
-type ProvisionResult = Awaited<ReturnType<typeof provisionSenderDomain>>;
+type ProvisionResult = SenderProvisionResult;
 
 type CustomerIoStrategy = "auto" | "specific" | "defaults";
-type GuidedSenderPath = "bring_your_own_domain" | "buy_new_domain";
+type GuidedSenderPath = "bring_your_own_email" | "bring_your_own_domain" | "buy_new_domain";
 
 type SetupState = {
   brandId: string;
@@ -63,6 +65,22 @@ type RegisterState = {
   registrantStateProvince: string;
   registrantPostalCode: string;
   registrantCountry: string;
+};
+
+type ExistingEmailState = {
+  email: string;
+  password: string;
+  accountName: string;
+  mailboxProvider: "gmail" | "outlook" | "imap";
+  imapHost: string;
+  imapPort: string;
+  imapSecure: boolean;
+  smtpHost: string;
+  smtpPort: string;
+  smtpSecure: boolean;
+  smtpUsername: string;
+  smtpPassword: string;
+  showServerSettings: boolean;
 };
 
 type NamecheapInventoryItem = Awaited<ReturnType<typeof fetchSavedNamecheapDomains>>["domains"][number];
@@ -100,8 +118,63 @@ const INITIAL_REGISTER: RegisterState = {
   registrantCountry: "US",
 };
 
+const INITIAL_EXISTING_EMAIL: ExistingEmailState = {
+  email: "",
+  password: "",
+  accountName: "",
+  mailboxProvider: "imap",
+  imapHost: "",
+  imapPort: "993",
+  imapSecure: true,
+  smtpHost: "",
+  smtpPort: "587",
+  smtpSecure: false,
+  smtpUsername: "",
+  smtpPassword: "",
+  showServerSettings: false,
+};
+
 function normalizeDomain(value: string) {
   return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
+}
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function existingEmailDefaults(email: string) {
+  const domain = normalizeDomain(email.split("@")[1] ?? "");
+  if (["gmail.com", "googlemail.com"].includes(domain)) {
+    return {
+      mailboxProvider: "gmail" as const,
+      imapHost: "imap.gmail.com",
+      imapPort: "993",
+      imapSecure: true,
+      smtpHost: "smtp.gmail.com",
+      smtpPort: "465",
+      smtpSecure: true,
+    };
+  }
+  if (["outlook.com", "hotmail.com", "live.com", "office365.com"].includes(domain)) {
+    return {
+      mailboxProvider: "outlook" as const,
+      imapHost: "outlook.office365.com",
+      imapPort: "993",
+      imapSecure: true,
+      smtpHost: "smtp.office365.com",
+      smtpPort: "587",
+      smtpSecure: false,
+    };
+  }
+  return {
+    mailboxProvider: "imap" as const,
+    imapHost: domain ? `imap.${domain}` : "",
+    imapPort: "993",
+    imapSecure: true,
+    smtpHost: domain ? `smtp.${domain}` : "",
+    smtpPort: "587",
+    smtpSecure: false,
+  };
 }
 
 function formatDateLabel(value: string) {
@@ -252,6 +325,7 @@ export default function SenderProvisionCard({
     forwardingTargetUrl: brands[0]?.website ?? "",
   }));
   const [register, setRegister] = useState<RegisterState>(INITIAL_REGISTER);
+  const [existingEmail, setExistingEmail] = useState<ExistingEmailState>(INITIAL_EXISTING_EMAIL);
   const [namecheapInventory, setNamecheapInventory] = useState<{
     configured: boolean;
     loading: boolean;
@@ -278,7 +352,7 @@ export default function SenderProvisionCard({
   const [busyKey, setBusyKey] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<ProvisionResult | null>(null);
-  const [guidedPath, setGuidedPath] = useState<GuidedSenderPath | null>(null);
+  const [guidedPath, setGuidedPath] = useState<GuidedSenderPath | null>("bring_your_own_email");
   const [advancedMode, setAdvancedMode] = useState(false);
   const [availabilityState, setAvailabilityState] = useState<{
     configured: boolean;
@@ -419,6 +493,7 @@ export default function SenderProvisionCard({
 
   const activeInventory = setup.provider === "mailpool" ? mailpoolInventory : namecheapInventory;
   const showSimpleFlow = !advancedMode;
+  const showExistingEmailPath = showSimpleFlow && guidedPath === "bring_your_own_email";
   const showBringYourOwnDomainPath = showSimpleFlow && guidedPath === "bring_your_own_domain";
   const showBuyDomainPath = showSimpleFlow && guidedPath === "buy_new_domain";
   const showGuidedBuyWizard = showBuyDomainPath && !advancedMode;
@@ -625,7 +700,7 @@ export default function SenderProvisionCard({
     }));
     setSetup((prev) => ({
       ...prev,
-      provider: "mailpool",
+      provider: path === "bring_your_own_email" ? prev.provider : "mailpool",
     }));
   }
 
@@ -708,6 +783,76 @@ export default function SenderProvisionCard({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Domain setup failed");
+    } finally {
+      setBusyKey("");
+    }
+  }
+
+  function updateExistingEmailAddress(value: string) {
+    const normalized = normalizeEmail(value);
+    const defaults = existingEmailDefaults(normalized);
+    setExistingEmail((prev) => ({
+      ...prev,
+      email: value,
+      mailboxProvider: prev.showServerSettings && prev.imapHost ? prev.mailboxProvider : defaults.mailboxProvider,
+      imapHost: prev.showServerSettings && prev.imapHost ? prev.imapHost : defaults.imapHost,
+      imapPort: prev.showServerSettings && prev.imapPort ? prev.imapPort : defaults.imapPort,
+      imapSecure: prev.showServerSettings ? prev.imapSecure : defaults.imapSecure,
+      smtpHost: prev.showServerSettings && prev.smtpHost ? prev.smtpHost : defaults.smtpHost,
+      smtpPort: prev.showServerSettings && prev.smtpPort ? prev.smtpPort : defaults.smtpPort,
+      smtpSecure: prev.showServerSettings ? prev.smtpSecure : defaults.smtpSecure,
+      smtpUsername: prev.smtpUsername || normalized,
+    }));
+  }
+
+  function validateExistingEmail() {
+    if (!setup.brandId) {
+      setError("Pick a brand first.");
+      return false;
+    }
+    const email = normalizeEmail(existingEmail.email);
+    if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email)) {
+      setError("Enter a valid email.");
+      return false;
+    }
+    if (!existingEmail.password.trim()) {
+      setError("Enter the mailbox password or app password.");
+      return false;
+    }
+    if (!existingEmail.imapHost.trim()) {
+      setError("Enter the IMAP host.");
+      return false;
+    }
+    return true;
+  }
+
+  async function runExistingEmailSetup() {
+    if (!validateExistingEmail()) return;
+    setBusyKey("existing-email");
+    setError("");
+    setResult(null);
+
+    try {
+      const provisioned = await registerExistingSenderEmail(setup.brandId, {
+        accountName: existingEmail.accountName.trim() || `${selectedBrand?.name ?? "Brand"} ${normalizeEmail(existingEmail.email)}`,
+        email: normalizeEmail(existingEmail.email),
+        assignToBrand: setup.assignToBrand,
+        mailboxProvider: existingEmail.mailboxProvider,
+        imapHost: existingEmail.imapHost.trim(),
+        imapPort: Number(existingEmail.imapPort || 993) || 993,
+        imapSecure: existingEmail.imapSecure,
+        imapPassword: existingEmail.password.trim(),
+        smtpHost: existingEmail.smtpHost.trim(),
+        smtpPort: Number(existingEmail.smtpPort || 587) || 587,
+        smtpSecure: existingEmail.smtpSecure,
+        smtpUsername: existingEmail.smtpUsername.trim() || normalizeEmail(existingEmail.email),
+        smtpPassword: existingEmail.smtpPassword.trim(),
+      });
+      setResult(provisioned);
+      onProvisioned(provisioned);
+      setExistingEmail(INITIAL_EXISTING_EMAIL);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Existing email setup failed");
     } finally {
       setBusyKey("");
     }
@@ -834,9 +979,9 @@ export default function SenderProvisionCard({
       <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-base font-semibold">How do you want to start?</div>
+            <div className="text-base font-semibold">Add a sender</div>
             <div className="text-sm text-[color:var(--muted-foreground)]">
-              Pick the simple path. Both guided options use Mailpool for mailbox setup and sender provisioning.
+              Pick the simple path. The agent tests delivery before any prospects.
             </div>
           </div>
           <Button
@@ -858,16 +1003,16 @@ export default function SenderProvisionCard({
           <div className="grid gap-3 md:grid-cols-2">
             <button
               type="button"
-              onClick={() => chooseGuidedPath("bring_your_own_domain")}
+              onClick={() => chooseGuidedPath("bring_your_own_email")}
               className={`grid gap-2 rounded-xl border p-4 text-left transition hover:border-[color:var(--accent)] ${
-                guidedPath === "bring_your_own_domain"
+                guidedPath === "bring_your_own_email"
                   ? "border-[color:var(--accent)] bg-[color:var(--surface)]"
                   : "border-[color:var(--border)] bg-[color:var(--surface)]"
               }`}
             >
-              <div className="text-sm font-semibold">Bring your own domain</div>
+              <div className="text-sm font-semibold">Use an email I already have</div>
               <div className="text-sm text-[color:var(--muted-foreground)]">
-                We will transfer it into Mailpool, replace the old DNS or mail setup on that domain, and create the sender for you.
+                Enter the email and app password. The agent figures out the usable route.
               </div>
             </button>
             <button
@@ -879,9 +1024,9 @@ export default function SenderProvisionCard({
                   : "border-[color:var(--border)] bg-[color:var(--surface)]"
               }`}
             >
-              <div className="text-sm font-semibold">No, buy me a new domain</div>
+              <div className="text-sm font-semibold">Create a new email for me</div>
               <div className="text-sm text-[color:var(--muted-foreground)]">
-                We will buy the domain, create the inbox, and set everything up for you.
+                LastB2B buys the domain, creates the inbox, then warms and tests it.
               </div>
             </button>
           </div>
@@ -891,6 +1036,201 @@ export default function SenderProvisionCard({
           </div>
         )}
       </div>
+
+      {showExistingEmailPath ? (
+        <div className="grid gap-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+          <div className="grid gap-1">
+            <div className="text-sm font-semibold">Add existing email</div>
+            <div className="text-sm text-[color:var(--muted-foreground)]">
+              We store the login, verify the route, then the agent runs seed tests with real campaign copy.
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            {brands.length > 1 ? (
+              <div className="grid gap-2">
+                <Label htmlFor="existing-email-brand">Brand</Label>
+                <Select
+                  id="existing-email-brand"
+                  value={setup.brandId}
+                  onChange={(event) => {
+                    const brandId = event.target.value;
+                    const brand = brands.find((item) => item.id === brandId) ?? null;
+                    setSetup((prev) => ({
+                      ...prev,
+                      brandId,
+                      selectedMailboxAccountId: assignments[brandId]?.mailboxAccountId ?? "",
+                      forwardingTargetUrl: brand?.website ?? "",
+                    }));
+                  }}
+                >
+                  <option value="">Select brand</option>
+                  {brands.map((brand) => (
+                    <option key={brand.id} value={brand.id}>
+                      {brand.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            ) : null}
+            <div className="grid gap-2">
+              <Label htmlFor="existing-email-address">Email</Label>
+              <Input
+                id="existing-email-address"
+                value={existingEmail.email}
+                onChange={(event) => updateExistingEmailAddress(event.target.value)}
+                placeholder="name@company.com"
+                autoComplete="email"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="existing-email-password">Password or app password</Label>
+              <Input
+                id="existing-email-password"
+                type="password"
+                value={existingEmail.password}
+                onChange={(event) => setExistingEmail((prev) => ({ ...prev, password: event.target.value }))}
+                autoComplete="current-password"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="existing-email-name">Internal name (optional)</Label>
+              <Input
+                id="existing-email-name"
+                value={existingEmail.accountName}
+                onChange={(event) => setExistingEmail((prev) => ({ ...prev, accountName: event.target.value }))}
+                placeholder={selectedBrand ? `${selectedBrand.name} sender` : "Optional"}
+              />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="text-left text-sm font-medium text-[color:var(--foreground)]"
+            onClick={() =>
+              setExistingEmail((prev) => ({ ...prev, showServerSettings: !prev.showServerSettings }))
+            }
+          >
+            {existingEmail.showServerSettings ? "Hide server settings" : "Server settings"}
+          </button>
+
+          {existingEmail.showServerSettings ? (
+            <div className="grid gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3 md:grid-cols-4">
+              <div className="grid gap-2">
+                <Label htmlFor="existing-provider">Mailbox type</Label>
+                <Select
+                  id="existing-provider"
+                  value={existingEmail.mailboxProvider}
+                  onChange={(event) =>
+                    setExistingEmail((prev) => ({
+                      ...prev,
+                      mailboxProvider:
+                        event.target.value === "gmail"
+                          ? "gmail"
+                          : event.target.value === "outlook"
+                            ? "outlook"
+                            : "imap",
+                    }))
+                  }
+                >
+                  <option value="imap">IMAP</option>
+                  <option value="gmail">Gmail</option>
+                  <option value="outlook">Outlook</option>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="existing-imap-host">IMAP host</Label>
+                <Input
+                  id="existing-imap-host"
+                  value={existingEmail.imapHost}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, imapHost: event.target.value }))}
+                  placeholder="imap.company.com"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="existing-imap-port">IMAP port</Label>
+                <Input
+                  id="existing-imap-port"
+                  value={existingEmail.imapPort}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, imapPort: event.target.value }))}
+                  inputMode="numeric"
+                />
+              </div>
+              <Label className="flex items-end gap-2 pb-2 text-sm font-normal">
+                <input
+                  type="checkbox"
+                  checked={existingEmail.imapSecure}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, imapSecure: event.target.checked }))}
+                />
+                IMAP SSL
+              </Label>
+              <div className="grid gap-2">
+                <Label htmlFor="existing-smtp-host">SMTP host</Label>
+                <Input
+                  id="existing-smtp-host"
+                  value={existingEmail.smtpHost}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, smtpHost: event.target.value }))}
+                  placeholder="smtp.company.com"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="existing-smtp-port">SMTP port</Label>
+                <Input
+                  id="existing-smtp-port"
+                  value={existingEmail.smtpPort}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, smtpPort: event.target.value }))}
+                  inputMode="numeric"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="existing-smtp-user">SMTP username</Label>
+                <Input
+                  id="existing-smtp-user"
+                  value={existingEmail.smtpUsername}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, smtpUsername: event.target.value }))}
+                  placeholder={normalizeEmail(existingEmail.email) || "same as email"}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="existing-smtp-password">SMTP password</Label>
+                <Input
+                  id="existing-smtp-password"
+                  type="password"
+                  value={existingEmail.smtpPassword}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, smtpPassword: event.target.value }))}
+                  placeholder="same as inbox password"
+                />
+              </div>
+              <Label className="flex items-center gap-2 text-sm font-normal">
+                <input
+                  type="checkbox"
+                  checked={existingEmail.smtpSecure}
+                  onChange={(event) => setExistingEmail((prev) => ({ ...prev, smtpSecure: event.target.checked }))}
+                />
+                SMTP SSL
+              </Label>
+            </div>
+          ) : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Label className="flex items-center gap-2 text-sm font-normal">
+              <input
+                type="checkbox"
+                checked={setup.assignToBrand}
+                onChange={(event) => setSetup((prev) => ({ ...prev, assignToBrand: event.target.checked }))}
+              />
+              Assign to this brand
+            </Label>
+            <Button
+              type="button"
+              disabled={Boolean(busyKey)}
+              onClick={() => void runExistingEmailSetup()}
+            >
+              {busyKey === "existing-email" ? "Adding..." : "Add existing email"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {showSharedSetupFields ? (
         <div className="grid gap-3 md:grid-cols-5">
@@ -1635,9 +1975,9 @@ export default function SenderProvisionCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Brand Domain Setup</CardTitle>
+        <CardTitle className="text-base">Add sender</CardTitle>
         <CardDescription>
-          Pick a domain, point it at the brand website, and connect it to the right sender account.
+          Use an email you own, or let LastB2B create one and test it before sending.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">{content}</CardContent>

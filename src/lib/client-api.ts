@@ -1732,6 +1732,35 @@ export async function provisionSenderDomain(
   };
 }
 
+export type SenderProvisionResult = Awaited<ReturnType<typeof provisionSenderDomain>>;
+
+export async function registerExistingSenderEmail(
+  brandId: string,
+  input: {
+    accountName?: string;
+    email: string;
+    assignToBrand?: boolean;
+    mailboxProvider?: "gmail" | "outlook" | "imap";
+    imapHost: string;
+    imapPort?: number;
+    imapSecure?: boolean;
+    imapPassword: string;
+    smtpHost?: string;
+    smtpPort?: number;
+    smtpSecure?: boolean;
+    smtpUsername?: string;
+    smtpPassword?: string;
+  }
+): Promise<SenderProvisionResult> {
+  const response = await fetch(`/api/brands/${brandId}/outreach/existing-sender`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return data.result as SenderProvisionResult;
+}
+
 export async function createOutreachAccountApi(input: {
   name: string;
   provider?: "customerio" | "mailpool";

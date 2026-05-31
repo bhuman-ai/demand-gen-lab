@@ -1066,10 +1066,17 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
         healthyWarmupAccountIdSet.has(accountId)
       );
       const repairFallbackAccountIds = healthyWarmupAccountIds.slice(0, warmupAutoRepairLimit());
+      const usableExistingAssignedAccountIds = assignedAccountIds.filter((accountId) =>
+        isUsableWarmupSenderAccount(accountById.get(accountId))
+      );
+      const preferredAccountIds =
+        healthyAssignedAccountIds.length > 0
+          ? healthyAssignedAccountIds
+          : usableExistingAssignedAccountIds.length > 0
+            ? usableExistingAssignedAccountIds
+            : repairFallbackAccountIds;
       const usableAssignedAccountIds = dedupeWarmupSenderAccountIds(
-        (healthyAssignedAccountIds.length ? healthyAssignedAccountIds : repairFallbackAccountIds).filter((accountId) =>
-          isUsableWarmupSenderAccount(accountById.get(accountId))
-        ),
+        preferredAccountIds.filter((accountId) => isUsableWarmupSenderAccount(accountById.get(accountId))),
         accountById
       );
       const removedAccountIds = assignedAccountIds.filter((accountId) => !usableAssignedAccountIds.includes(accountId));

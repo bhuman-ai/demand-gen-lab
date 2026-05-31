@@ -1050,9 +1050,23 @@ async function repairDeliverabilitySeedPool(dryRun: boolean) {
     })
     .slice(0, seedPoolRepairMaxChecks());
 
-  const checks = await mapWithConcurrency(seedAccounts, 5, async (account) =>
-    repairSeedMailboxAccount({ account, dryRun, excludedEmails })
-  );
+  const checks = await mapWithConcurrency(seedAccounts, 5, async (account) => {
+    try {
+      return await repairSeedMailboxAccount({ account, dryRun, excludedEmails });
+    } catch (error) {
+      return {
+        accountId: account.id,
+        email: seedMailboxEmail(account),
+        name: account.name,
+        previousStatus: account.status,
+        previousMailboxStatus: account.config.mailbox.status,
+        checkedAt: nowIso(),
+        dryRun,
+        outcome: "failed",
+        reason: error instanceof Error ? error.message : "Seed mailbox repair failed.",
+      };
+    }
+  });
   const after = await readDeliverabilitySeedPoolSnapshot();
   return {
     before,

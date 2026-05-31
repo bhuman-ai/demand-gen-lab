@@ -40,7 +40,11 @@ import {
   listOwnerRuns,
   setBrandOutreachAssignment,
 } from "@/lib/outreach-data";
-import { getOutreachAccountFromEmail, supportsAnyDelivery } from "@/lib/outreach-account-helpers";
+import {
+  getOutreachAccountFromEmail,
+  isOutreachGmailUiLoginReady,
+  supportsAnyDelivery,
+} from "@/lib/outreach-account-helpers";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 import {
   buildSenderRoutingSignalFromDomainRow,
@@ -137,12 +141,21 @@ function normalizeText(value: unknown) {
 }
 
 function isUsableWarmupSenderAccount(account: Awaited<ReturnType<typeof listOutreachAccounts>>[number] | null | undefined) {
+  const hasUsableReplyMailbox =
+    account?.config.mailbox.deliveryMethod === "gmail_ui"
+      ? isOutreachGmailUiLoginReady(account)
+      : account?.config.mailbox.status === "connected";
+  const customerIoProvisioningComplete =
+    account?.provider !== "customerio" ||
+    Boolean(account.config.customerIo.siteId.trim() && account.config.customerIo.workspaceId.trim());
   return Boolean(
     account &&
       account.status === "active" &&
       account.accountType !== "mailbox" &&
       account.config.mailpool.status !== "deleted" &&
       account.config.mailbox.status !== "disconnected" &&
+      hasUsableReplyMailbox &&
+      customerIoProvisioningComplete &&
       supportsAnyDelivery(account)
   );
 }

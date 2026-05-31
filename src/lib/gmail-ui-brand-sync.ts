@@ -79,10 +79,6 @@ function scoreCandidate(candidate: Candidate, currentAssignmentId: string) {
   return score;
 }
 
-function accountShouldStayOnExistingTransport(account: OutreachAccount) {
-  return account.config.mailbox.deliveryMethod !== "gmail_ui";
-}
-
 function accountTransportIsReadyForAssignment(account: OutreachAccount) {
   if (account.status !== "active") return false;
   if (account.config.mailbox.status !== "connected") return false;
@@ -97,6 +93,25 @@ function accountTransportIsReadyForAssignment(account: OutreachAccount) {
     );
   }
   return true;
+}
+
+function accountHasSmtpTransportConfig(account: OutreachAccount) {
+  return Boolean(
+    String(account.config.mailbox.smtpHost ?? "").trim() &&
+      String(account.config.mailbox.smtpUsername ?? "").trim() &&
+      String(account.config.mailbox.host ?? "").trim() &&
+      account.config.mailpool.status === "active"
+  );
+}
+
+function resolveSyncDeliveryMethod(account: OutreachAccount) {
+  if (account.config.mailbox.deliveryMethod !== "gmail_ui") {
+    return account.config.mailbox.deliveryMethod;
+  }
+  if (!accountTransportIsReadyForAssignment(account) && accountHasSmtpTransportConfig(account)) {
+    return "smtp" as const;
+  }
+  return "gmail_ui" as const;
 }
 
 function assignedAccountIds(assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>) {
@@ -171,17 +186,18 @@ export async function syncBrandGmailUiAssignments(options?: {
       existingUserDataDir: chosen.account.config.mailbox.gmailUiUserDataDir,
       email: fromEmail,
     });
-    const preserveExistingTransport = accountShouldStayOnExistingTransport(chosen.account);
+    const deliveryMethod = resolveSyncDeliveryMethod(chosen.account);
+    const preserveExistingTransport = deliveryMethod !== "gmail_ui";
     if (!preserveExistingTransport) {
       await mkdir(userDataDir, { recursive: true });
     }
 
     const loginStatus = normalizeGmailUiLoginStatus({
-      deliveryMethod: preserveExistingTransport ? chosen.account.config.mailbox.deliveryMethod : "gmail_ui",
+      deliveryMethod,
       state: chosen.account.config.mailbox.gmailUiLoginState,
       checkedAt: chosen.account.config.mailbox.gmailUiLoginCheckedAt,
       message: preserveExistingTransport
-        ? "Existing non-Gmail transport is ready, so Gmail UI sync did not change the sender route."
+        ? "SMTP transport is available, so Gmail UI sync kept delivery off Gmail UI."
         : chosen.account.config.mailbox.gmailUiLoginMessage,
       forceLoginRequired: !preserveExistingTransport && rehomedProfile,
     });
@@ -191,6 +207,8 @@ export async function syncBrandGmailUiAssignments(options?: {
       config: {
         mailbox: preserveExistingTransport
           ? {
+              provider: deliveryMethod === "smtp" ? ("imap" as const) : chosen.account.config.mailbox.provider,
+              deliveryMethod,
               email: fromEmail,
               status: chosen.account.config.mailpool.status === "active" ? "connected" : "disconnected",
               gmailUiLoginState: loginStatus.gmailUiLoginState,

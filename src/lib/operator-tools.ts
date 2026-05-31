@@ -19,6 +19,11 @@ import {
 import {
   countExperimentSendableLeadContacts,
 } from "@/lib/experiment-prospect-import";
+import { importScaleCampaignProspectRows } from "@/lib/scale-campaign-prospect-import";
+import {
+  hasAirscalePeopleSourcingConfig,
+  sourceLeadsFromAirscalePeopleSearch,
+} from "@/lib/outreach-providers";
 import { getExperimentVerifiedEmailLeadTarget } from "@/lib/experiment-policy";
 import {
   createExperimentRecord,
@@ -202,6 +207,66 @@ function buildCustomerIoProvisionPreview(input: Record<string, unknown>) {
 
 function buildSimplePreview(title: string, summary: string) {
   return { title, summary };
+}
+
+function inputStringList(...values: unknown[]) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const source = Array.isArray(value)
+      ? value
+      : String(value ?? "")
+          .split(/[\n,]/g)
+          .map((entry) => entry.trim());
+    for (const item of source) {
+      const normalized = asString(item);
+      const key = normalized.toLowerCase();
+      if (!normalized || seen.has(key)) continue;
+      seen.add(key);
+      out.push(normalized);
+    }
+  }
+  return out;
+}
+
+function compactSourcingText(value: unknown, max = 120) {
+  const normalized = asString(value);
+  if (!normalized) return "";
+  if (normalized.length <= max) return normalized;
+  const slice = normalized.slice(0, max);
+  const breakAt = slice.lastIndexOf(" ");
+  return (breakAt > 40 ? slice.slice(0, breakAt) : slice).trim();
+}
+
+function defaultAirscaleKeywords(input: {
+  brand: BrandRecord | null;
+  campaign: ScaleCampaignRecord | null;
+}) {
+  return inputStringList(
+    input.campaign?.snapshot.offer,
+    input.campaign?.snapshot.audience,
+    input.brand?.product,
+    input.brand?.targetMarkets,
+    input.brand?.idealCustomerProfiles,
+    input.brand?.keyFeatures
+  )
+    .map((value) => compactSourcingText(value))
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function buildAirscaleSourcingPreview(input: Record<string, unknown>) {
+  const campaignId = asString(input.campaignId);
+  const maxResults = Math.max(1, Math.min(100, asNumber(input.maxResults ?? input.limit ?? input.size, 25)));
+  const keywords = inputStringList(input.keywords, input.keyword, input.query).slice(0, 4);
+  return {
+    title: "Source people with Airscale",
+    summary: campaignId
+      ? `Search Airscale and import up to ${maxResults} people into campaign ${campaignId}.`
+      : `Search Airscale for up to ${maxResults} people.`,
+    keywords,
+    campaignId,
+  };
 }
 
 function buildRegistrant(value: unknown) {
@@ -1371,6 +1436,105 @@ const TOOL_SPECS: OperatorToolSpec[] = [
       return {
         summary: `${snapshot.evidence.brandName}: ${rollup.senderCount} warmup sender${rollup.senderCount === 1 ? "" : "s"}, best posture ${rollup.bestPosture}, ${rollup.totalWarmupReplies} warmup repl${rollup.totalWarmupReplies === 1 ? "y" : "ies"}, ${rollup.sendersNeedingProbe} needing probe, ${rollup.sendersInRecovery} in recovery.`,
         result: snapshot as unknown as Record<string, unknown>,
+      } satisfies OperatorToolResult;
+    },
+  },
+  {
+    name: "source_airscale_people",
+    riskLevel: "safe_write",
+    approvalMode: "none",
+    description:
+      "Search Airscale Find People with agent-chosen filters and optionally import the results into a campaign's lead inventory. Use when lead/warmup inventory is blocked and Airscale is the better sourcing route than repeating the same provider.",
+    autonomyHint:
+      "This is a flexible sourcing option, not a scripted warmup step. Choose keywords, titles, domains, or locations from the brand/campaign context, then import only when a campaignId is known.",
+    previewTitle: "Source people with Airscale",
+    buildPreview: buildAirscaleSourcingPreview,
+    run: async (input) => {
+      const brandId = requireString(input, "brandId");
+      const campaignId = asString(input.campaignId);
+      const [brand, campaign] = await Promise.all([
+        getBrandById(brandId),
+        campaignId ? getScaleCampaignRecordById(brandId, campaignId) : Promise.resolve(null),
+      ]);
+      if (!brand) {
+        throw new Error("Brand not found");
+      }
+      if (campaignId && !campaign) {
+        throw new Error("Campaign not found");
+      }
+      if (!hasAirscalePeopleSourcingConfig()) {
+        throw new Error("AIRSCALE_API_KEY is not configured.");
+      }
+
+      const explicitKeywords = inputStringList(input.keywords, input.keyword, input.query);
+      const keywords = (explicitKeywords.length ? explicitKeywords : defaultAirscaleKeywords({ brand, campaign }))
+        .map((value) => compactSourcingText(value))
+        .filter(Boolean)
+        .slice(0, 8);
+      const maxResults = Math.max(1, Math.min(100, asNumber(input.maxResults ?? input.limit ?? input.size, 25)));
+      const search = await sourceLeadsFromAirscalePeopleSearch({
+        keywords,
+        jobTitles: inputStringList(input.jobTitles, input.titles, input.roles).slice(0, 24),
+        companyDomains: inputStringList(input.companyDomains, input.domains).slice(0, 100),
+        companyLinkedinUrls: inputStringList(input.companyLinkedinUrls, input.linkedinCompanyUrls).slice(0, 100),
+        locations: inputStringList(input.locations, input.location).slice(0, 50),
+        excludeKeywords: inputStringList(input.excludeKeywords).slice(0, 50),
+        excludeJobTitles: inputStringList(input.excludeJobTitles).slice(0, 50),
+        excludeCompanyDomains: inputStringList(input.excludeCompanyDomains).slice(0, 100),
+        size: maxResults,
+        cursor: asString(input.cursor),
+      });
+
+      if (!search.ok) {
+        throw new Error(search.error || "Airscale people search failed.");
+      }
+
+      const shouldImport = Boolean(campaignId) && input.importToCampaign !== false;
+      const importResult =
+        shouldImport && campaign
+          ? await importScaleCampaignProspectRows({
+              brandId,
+              campaignId: campaign.id,
+              rows: search.leads,
+              requestOrigin: "operator_airscale_people_source",
+              tableTitle: "Airscale people search",
+              prompt: JSON.stringify(search.query),
+              entityType: "person",
+              backgroundMode: false,
+            })
+          : null;
+      const imported = importResult?.importedCount ?? 0;
+      const stored = importResult?.storedLeadCount ?? 0;
+      const lane = campaign ? resolveScaleCampaignLane(campaign) : "";
+      return {
+        summary: shouldImport
+          ? `Airscale returned ${search.leads.length} people and imported ${imported} sendable lead${imported === 1 ? "" : "s"}${stored && stored !== imported ? ` (${stored} stored)` : ""}.`
+          : `Airscale returned ${search.leads.length} people.`,
+        result: {
+          provider: "airscale",
+          brandId,
+          campaignId,
+          lane,
+          query: search.query,
+          total: search.total,
+          returned: search.leads.length,
+          nextCursor: search.nextCursor,
+          imported,
+          stored,
+          importResult,
+          sample: search.leads.slice(0, 8),
+        },
+        receipt: shouldImport
+          ? {
+              title: "Airscale people sourced",
+              summary: `Imported ${imported} sendable lead${imported === 1 ? "" : "s"} into campaign inventory.`,
+              details: [
+                `Returned: ${search.leads.length}`,
+                `Stored: ${stored}`,
+                `Campaign: ${campaign?.name ?? campaignId}`,
+              ],
+            }
+          : undefined,
       } satisfies OperatorToolResult;
     },
   },

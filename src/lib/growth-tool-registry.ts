@@ -85,6 +85,35 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
   },
   {
+    name: "airscale.people.source",
+    operatorToolName: "source_airscale_people",
+    title: "Source people with Airscale",
+    description:
+      "Search Airscale Find People with agent-chosen filters and optionally import returned people into a campaign's lead inventory. Useful when warmup or outbound inventory needs a different sourcing route.",
+    provider: "airscale",
+    category: "lead_source",
+    capability: "find_leads",
+    risk: { spendRisk: true },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        campaignId: stringProp("Optional campaign id to import into"),
+        keywords: arrayProp("Profile keywords or ICP terms for Airscale keyword search"),
+        jobTitles: arrayProp("Current job titles to include"),
+        companyDomains: arrayProp("Company domains to include"),
+        companyLinkedinUrls: arrayProp("Company LinkedIn URLs to include"),
+        locations: arrayProp("Cities, regions, or countries to include"),
+        excludeKeywords: arrayProp("Profile keywords to exclude"),
+        excludeJobTitles: arrayProp("Job titles to exclude"),
+        excludeCompanyDomains: arrayProp("Company domains to exclude"),
+        maxResults: numberProp("Maximum Airscale people to return, capped at 100"),
+        importToCampaign: { type: "boolean", description: "When campaignId is set, import results into that campaign. Defaults true." },
+        cursor: stringProp("Optional Airscale pagination cursor"),
+      },
+      ["brandId"]
+    ),
+  },
+  {
     name: "gmail_ui.account.observe",
     operatorToolName: "gmail_ui_observe_account",
     title: "Observe Gmail UI session",

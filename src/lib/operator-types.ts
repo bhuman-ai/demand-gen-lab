@@ -39,6 +39,7 @@ export type OperatorToolName =
   | "inspect_outbound_blocker_chain"
   | "inspect_sender_delivery_evidence"
   | "get_warmup_intelligence_snapshot"
+  | "source_airscale_people"
   | "record_capability_gap"
   | "request_user_attention"
   | "summarize_campaign_status"

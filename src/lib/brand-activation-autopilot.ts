@@ -2525,6 +2525,7 @@ async function planActivationWithLlm(input: {
     "- Never invent IDs, LinkedIn account IDs, campaign URLs, managed table IDs, run IDs, or message copy. If a required input is unknown, inspect state first or choose observe.",
     "- Prefer actual campaign copy for delivery, email, and LinkedIn outreach tools. Do not use synthetic probe copy for deliverability-sensitive decisions.",
     "- Treat warmup as reply acquisition and inbox trust, not a calendar ladder. When sender reputation is the question, inspect sender.warmup.snapshot and choose a legitimate next move from evidence.",
+    "- If list/prep is blocked by one sourcing provider, treat the growth tool catalog as a provider menu. Prefer a different lead_source tool such as Airscale when the campaign context gives enough filters, instead of retrying the same failed provider.",
     "- For confusing blocker chains, use read tools such as lastb2b.brand.snapshot, lastb2b.brand.investigate, sender.warmup.snapshot, campaign snapshots, and sender delivery evidence before choosing a write/send/provision action.",
     "- Spend-risk or reputation-risk tools may be blocked by runtime guardrails; still choose them when they are the correct action and the evidence supports it.",
     "",

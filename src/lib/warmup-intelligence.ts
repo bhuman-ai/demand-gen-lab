@@ -120,7 +120,7 @@ const WARMUP_OPERATING_GUIDE = {
     {
       id: "vendor_research",
       description:
-        "Ask SaaS sales/support teams, agencies, service providers, newsletter owners, partner managers, or freelancers questions the brand might actually care about.",
+        "Ask SaaS sales/support teams, agencies, service providers, newsletter owners, partner managers, or freelancers questions the brand might actually care about. If campaign inventory is empty, choose an available lead-source provider from the tool catalog, including Airscale when its filters fit the brand context.",
       goodEvidence: ["pricing/info reply", "question back", "case study/rate card/demo/info exchange"],
       avoid: ["wasting people with fake purchase intent", "asking about products unrelated to the brand"],
     },
@@ -163,6 +163,7 @@ const WARMUP_OPERATING_GUIDE = {
     "Prefer one legitimate reply-prone action over many low-signal sends.",
     "If the inbox has no current placement proof, run or inspect exact-copy seed probes before prospect ramp.",
     "If a warmup campaign has no sendable inventory or repeated prep failures, inspect campaign/readiness evidence before retrying the same move.",
+    "If the blocker is sourcing/provider-specific, do not treat that as no possible move. Inspect the tool catalog and choose another lead-source route such as Airscale when the brand/campaign context gives enough filters.",
     "If a move repeats without improving replies, placement, or state, write that in self-reflection and choose a different move.",
   ],
 } as const;

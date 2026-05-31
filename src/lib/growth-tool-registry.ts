@@ -85,6 +85,69 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
   },
   {
+    name: "warmup.agent.plan",
+    operatorToolName: "plan_warmup_agent_work",
+    title: "Plan agent-conducted warmup",
+    description:
+      "Build a warmup workbench for the agent: brand context, sender posture, warmup campaigns, recent replies, and the enqueue contract. The agent still chooses real recipients and writes exact messages.",
+    provider: "lastb2b",
+    category: "deliverability",
+    capability: "inspect_state",
+    inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
+  },
+  {
+    name: "warmup.agent.enqueue_messages",
+    operatorToolName: "enqueue_warmup_agent_messages",
+    title: "Enqueue agent-authored warmup messages",
+    description:
+      "Schedule exact reply-acquisition warmup emails already chosen and written by the agent. This only performs audited send plumbing: run, leads, messages, dispatch job, reply sync job, and evidence events.",
+    provider: "lastb2b",
+    category: "channel",
+    capability: "launch_campaign",
+    risk: { reputationRisk: true },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        campaignId: stringProp("Optional default warmup campaign id"),
+        senderAccountId: stringProp("Optional default sender account id"),
+        targetMessages: objectArrayProp(
+          "Agent-selected targets. Each must include recipientEmail, subject, and body. Optional: campaignId, senderAccountId, recipientName, recipientCompany, recipientTitle, sourceUrl, reason."
+        ),
+        startAt: stringProp("Optional ISO start time"),
+        minSpacingMinutes: numberProp("Spacing between messages"),
+        dailyCap: numberProp("Daily cap for created runs, capped by the tool"),
+        hourlyCap: numberProp("Hourly cap for created runs, capped by the tool"),
+      },
+      ["brandId", "targetMessages"]
+    ),
+  },
+  {
+    name: "deliverability.probe.start",
+    operatorToolName: "start_deliverability_probe",
+    title: "Start exact-copy deliverability probe",
+    description:
+      "Start an inbox-placement probe from an existing run that already contains real scheduled/sent copy. Use after agent-authored warmup or real campaign copy exists.",
+    provider: "lastb2b",
+    category: "deliverability",
+    capability: "test_inbox_placement",
+    risk: { reputationRisk: true },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        campaignId: stringProp("Optional campaign id"),
+        runId: stringProp("Optional run id"),
+        senderAccountId: stringProp("Optional sender account id"),
+        probeAllSenders: { type: "boolean", description: "Probe every available sender transport when true." },
+        action: enumProp(
+          ["probe_deliverability", "probe_all_senders_deliverability"],
+          "Optional explicit probe action"
+        ),
+        reason: stringProp("Reason for starting the probe"),
+      },
+      ["brandId"]
+    ),
+  },
+  {
     name: "airscale.people.source",
     operatorToolName: "source_airscale_people",
     title: "Source people with Airscale",
@@ -265,6 +328,17 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     provider: "lastb2b",
     category: "analytics",
     capability: "inspect_state",
+    inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
+  },
+  {
+    name: "reply.check",
+    operatorToolName: "summarize_inbox",
+    title: "Check replies",
+    description:
+      "Read reply threads and reply quality after warmup or outreach work, so the agent can decide whether replies improved, stalled, or need a different approach.",
+    provider: "lastb2b",
+    category: "analytics",
+    capability: "sync_results",
     inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
   },
   {
@@ -648,6 +722,10 @@ function arrayProp(description: string) {
 
 function objectProp(description: string) {
   return { type: "object", description, additionalProperties: true };
+}
+
+function objectArrayProp(description: string) {
+  return { type: "array", description, items: { type: "object", additionalProperties: true } };
 }
 
 function enumProp(values: string[], description: string) {

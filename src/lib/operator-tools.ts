@@ -8,6 +8,7 @@ import {
 import type {
   BrandRecord,
   DeliverabilityProbeRun,
+  EmailVerificationState,
   LeadRow,
   ScaleCampaignRecord,
 } from "@/lib/factory-types";
@@ -21,6 +22,7 @@ import {
 } from "@/lib/experiment-prospect-import";
 import { importScaleCampaignProspectRows } from "@/lib/scale-campaign-prospect-import";
 import {
+  extractFirstEmailAddress,
   hasAirscalePeopleSourcingConfig,
   sourceLeadsFromAirscalePeopleSearch,
 } from "@/lib/outreach-providers";
@@ -65,6 +67,10 @@ import {
   getReplyDraft,
   getReplyThread,
   getReplyThreadState,
+  createOutreachEvent,
+  createOutreachRun,
+  createRunMessages,
+  enqueueOutreachJob,
   listRunJobs,
   listDeliverabilityProbeRuns,
   listReplyMessagesByThread,
@@ -75,8 +81,10 @@ import {
   listRunLeads,
   listRunMessages,
   listReplyThreadsByBrand,
+  updateOutreachRun,
   updateOutreachAccount,
   updateReplyDraft,
+  upsertRunLeads,
 } from "@/lib/outreach-data";
 import { provisionSender } from "@/lib/outreach-provisioning";
 import {
@@ -457,6 +465,462 @@ async function getScaleCampaignOrThrow(brandId: string, campaignId: string) {
   const campaign = await getScaleCampaignRecordById(brandId, campaignId);
   if (!campaign) throw new Error("Campaign not found");
   return campaign;
+}
+
+function addMinutesIso(dateIso: string, minutes: number) {
+  const base = Date.parse(dateIso);
+  const start = Number.isFinite(base) ? base : Date.now();
+  return new Date(start + minutes * 60 * 1000).toISOString();
+}
+
+function emailDomain(email: string) {
+  return email.split("@")[1]?.trim().toLowerCase() ?? "";
+}
+
+function campaignSenderId(campaign: Pick<ScaleCampaignRecord, "scalePolicy">) {
+  return asString(campaign.scalePolicy.accountId || campaign.scalePolicy.mailboxAccountId);
+}
+
+type AgentWarmupMessage = {
+  campaignId: string;
+  senderAccountId: string;
+  recipientEmail: string;
+  recipientName: string;
+  recipientCompany: string;
+  recipientTitle: string;
+  recipientDomain: string;
+  sourceUrl: string;
+  reason: string;
+  subject: string;
+  body: string;
+  realVerifiedEmail: boolean;
+  emailVerification: EmailVerificationState | null;
+};
+
+function normalizeAgentWarmupMessages(input: Record<string, unknown>) {
+  const raw =
+    Array.isArray(input.targetMessages)
+      ? input.targetMessages
+      : Array.isArray(input.messages)
+        ? input.messages
+        : Array.isArray(input.targets)
+          ? input.targets
+          : [];
+  const normalized = raw
+    .map((entry) => {
+      const row = asRecord(entry);
+      const recipientEmail = extractFirstEmailAddress(
+        row.recipientEmail ?? row.email ?? row.to ?? row.address
+      ).toLowerCase();
+      const subject = asString(row.subject);
+      const body = asString(row.body ?? row.message ?? row.emailBody);
+      const recipientDomain = asString(row.recipientDomain ?? row.domain) || emailDomain(recipientEmail);
+      const verification = asRecord(row.emailVerification);
+      return {
+        campaignId: asString(row.campaignId),
+        senderAccountId: asString(row.senderAccountId ?? row.accountId),
+        recipientEmail,
+        recipientName: asString(row.recipientName ?? row.name),
+        recipientCompany: asString(row.recipientCompany ?? row.company),
+        recipientTitle: asString(row.recipientTitle ?? row.title),
+        recipientDomain,
+        sourceUrl: asString(row.sourceUrl ?? row.url),
+        reason: asString(row.reason ?? row.why ?? row.rationale),
+        subject,
+        body,
+        realVerifiedEmail: row.realVerifiedEmail === true,
+        emailVerification: Object.keys(verification).length
+          ? (verification as EmailVerificationState)
+          : null,
+      } satisfies AgentWarmupMessage;
+    })
+    .filter((row) => row.recipientEmail && row.subject && row.body);
+
+  if (!normalized.length) {
+    throw new Error(
+      "targetMessages is required. Each message needs recipientEmail, subject, and body chosen by the agent."
+    );
+  }
+
+  const seen = new Set<string>();
+  return normalized.filter((row) => {
+    const key = `${row.campaignId}|${row.senderAccountId}|${row.recipientEmail}|${row.subject}|${row.body}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function listWarmupCampaignsForBrand(brandId: string) {
+  const campaigns = await listScaleCampaignRecords(brandId);
+  return campaigns.filter(
+    (campaign) =>
+      resolveScaleCampaignLane(campaign) === "warmup" &&
+      campaign.status !== "archived" &&
+      campaign.status !== "completed"
+  );
+}
+
+async function resolveAgentWarmupCampaign(input: {
+  brandId: string;
+  campaigns: ScaleCampaignRecord[];
+  campaignId?: string;
+  senderAccountId?: string;
+  allowNonWarmupCampaign?: boolean;
+}) {
+  const requestedCampaignId = asString(input.campaignId);
+  if (requestedCampaignId) {
+    const campaign = await getScaleCampaignOrThrow(input.brandId, requestedCampaignId);
+    if (
+      !input.allowNonWarmupCampaign &&
+      resolveScaleCampaignLane(campaign) !== "warmup"
+    ) {
+      throw new Error(
+        "This tool only schedules warmup/reply-acquisition campaigns unless allowNonWarmupCampaign is true."
+      );
+    }
+    return campaign;
+  }
+
+  const senderAccountId = asString(input.senderAccountId);
+  if (senderAccountId) {
+    const senderCampaign =
+      input.campaigns.find((campaign) => campaignSenderId(campaign) === senderAccountId) ?? null;
+    if (senderCampaign) return senderCampaign;
+  }
+
+  const active = input.campaigns.find((campaign) => campaign.status === "active");
+  if (active) return active;
+  const paused = input.campaigns.find((campaign) => campaign.status === "paused");
+  if (paused) return paused;
+  const draft = input.campaigns.find((campaign) => campaign.status === "draft");
+  if (draft) return draft;
+  throw new Error("No warmup campaign exists for this brand/sender yet.");
+}
+
+async function planWarmupAgentWork(input: Record<string, unknown>) {
+  const brandId = requireString(input, "brandId");
+  const [brand, snapshot, warmupCampaigns, inbox] = await Promise.all([
+    getBrandById(brandId),
+    readWarmupIntelligenceSnapshot(brandId),
+    listWarmupCampaignsForBrand(brandId),
+    listReplyThreadsByBrand(brandId),
+  ]);
+  if (!brand) throw new Error("Brand not found");
+
+  const campaignSummaries = await Promise.all(
+    warmupCampaigns.map(async (campaign) => {
+      const runs = await listOwnerRuns(brandId, "campaign", campaign.id);
+      const latestRun = pickRun(runs);
+      const [messages, leads, jobs] = latestRun
+        ? await Promise.all([
+            listRunMessages(latestRun.id),
+            listRunLeads(latestRun.id),
+            listRunJobs(latestRun.id),
+          ])
+        : [[], [], []];
+      return {
+        campaignId: campaign.id,
+        name: campaign.name,
+        status: campaign.status,
+        lane: resolveScaleCampaignLane(campaign),
+        senderAccountId: campaignSenderId(campaign),
+        replyMailboxAccountId: asString(campaign.scalePolicy.mailboxAccountId),
+        dailyCap: campaign.scalePolicy.dailyCap,
+        hourlyCap: campaign.scalePolicy.hourlyCap,
+        minSpacingMinutes: campaign.scalePolicy.minSpacingMinutes,
+        latestRunId: latestRun?.id ?? "",
+        latestRunStatus: latestRun?.status ?? "",
+        existingLeads: leads.length,
+        scheduledOrSentMessages: messages.filter((message) =>
+          ["scheduled", "sent"].includes(message.status)
+        ).length,
+        queuedJobs: jobs.filter((job) => job.status === "queued").map((job) => job.jobType),
+      };
+    })
+  );
+
+  return {
+    summary: `${brand.name}: ${warmupCampaigns.length} warmup campaign${warmupCampaigns.length === 1 ? "" : "s"}, ${snapshot.evidence.rollup.totalWarmupReplies} warmup repl${snapshot.evidence.rollup.totalWarmupReplies === 1 ? "y" : "ies"}, ${snapshot.evidence.rollup.sendersNeedingProbe} sender${snapshot.evidence.rollup.sendersNeedingProbe === 1 ? "" : "s"} needing probe.`,
+    result: {
+      brand: {
+        id: brand.id,
+        name: brand.name,
+        website: brand.website,
+        product: brand.product,
+        idealCustomerProfiles: brand.idealCustomerProfiles,
+        targetMarkets: brand.targetMarkets,
+      },
+      warmupEvidence: snapshot.evidence,
+      warmupCampaigns: campaignSummaries,
+      recentReplyThreads: inbox.threads.slice(0, 20).map((thread) => ({
+        id: thread.id,
+        campaignId: thread.campaignId,
+        runId: thread.runId,
+        subject: thread.subject,
+        sentiment: thread.sentiment,
+        intent: thread.intent,
+        lastMessageAt: thread.lastMessageAt,
+        progressScore: thread.stateSummary?.progressScore ?? 0,
+      })),
+      agentWorkspaceContract: {
+        principle:
+          "The agent chooses real recipients and exact subject/body. The tool only schedules and audits the send plumbing.",
+        targetSourceIdeas:
+          "Use legitimate reply-prone business reasons: vendors, SaaS support/sales, newsletters/sponsorships, partners, friendly contacts, existing customers, or controlled trusted inboxes. Do not fake demand.",
+        enqueueTool: "warmup.agent.enqueue_messages",
+        requiredTargetMessageFields: ["recipientEmail", "subject", "body"],
+        optionalTargetMessageFields: [
+          "campaignId",
+          "senderAccountId",
+          "recipientName",
+          "recipientCompany",
+          "recipientTitle",
+          "sourceUrl",
+          "reason",
+          "realVerifiedEmail",
+          "emailVerification",
+        ],
+      },
+    },
+  } satisfies OperatorToolResult;
+}
+
+async function enqueueWarmupAgentMessages(input: Record<string, unknown>) {
+  const brandId = requireString(input, "brandId");
+  const brand = await getBrandById(brandId);
+  if (!brand) throw new Error("Brand not found");
+
+  const rawMessages = normalizeAgentWarmupMessages(input);
+  const maxMessages = Math.max(1, Math.min(10, asNumber(input.maxMessages, rawMessages.length)));
+  const targetMessages = rawMessages.slice(0, maxMessages);
+  const campaigns = await listWarmupCampaignsForBrand(brandId);
+  const allowNonWarmupCampaign = input.allowNonWarmupCampaign === true;
+  const defaultCampaignId = asString(input.campaignId);
+  const defaultSenderAccountId = asString(input.senderAccountId ?? input.accountId);
+
+  const groups = new Map<string, { campaign: ScaleCampaignRecord; messages: AgentWarmupMessage[] }>();
+  for (const message of targetMessages) {
+    const campaign = await resolveAgentWarmupCampaign({
+      brandId,
+      campaigns,
+      campaignId: message.campaignId || defaultCampaignId,
+      senderAccountId: message.senderAccountId || defaultSenderAccountId,
+      allowNonWarmupCampaign,
+    });
+    const existing = groups.get(campaign.id);
+    if (existing) {
+      existing.messages.push(message);
+    } else {
+      groups.set(campaign.id, { campaign, messages: [message] });
+    }
+  }
+
+  const startAt = asString(input.startAt) || nowIso();
+  const minSpacingMinutes = Math.max(10, Math.min(240, asNumber(input.minSpacingMinutes, 30)));
+  const runs = [];
+  let globalIndex = 0;
+
+  for (const group of groups.values()) {
+    const campaign = group.campaign;
+    const senderAccountId =
+      asString(input.senderAccountId ?? input.accountId) || campaignSenderId(campaign);
+    if (!senderAccountId) {
+      throw new Error(`Warmup campaign ${campaign.id} does not have a sender account.`);
+    }
+    const sender = await getOutreachAccount(senderAccountId);
+    const senderEmail = sender ? getOutreachAccountFromEmail(sender).trim().toLowerCase() : "";
+    if (!sender) {
+      throw new Error(`Sender account ${senderAccountId} was not found.`);
+    }
+
+    const run = await createOutreachRun({
+      brandId,
+      campaignId: campaign.id,
+      experimentId: campaign.sourceExperimentId || "",
+      hypothesisId: "",
+      ownerType: "campaign",
+      ownerId: campaign.id,
+      accountId: senderAccountId,
+      lockedSenderAccountId: senderAccountId,
+      status: "scheduled",
+      cadence: "3_step_7_day",
+      dailyCap: Math.max(1, Math.min(10, asNumber(input.dailyCap, group.messages.length))),
+      hourlyCap: Math.max(1, Math.min(3, asNumber(input.hourlyCap, 1))),
+      timezone: asString(input.timezone) || campaign.scalePolicy.timezone || "America/Los_Angeles",
+      minSpacingMinutes,
+      externalRef: "codex_agent_warmup",
+    });
+
+    const leads = await upsertRunLeads(
+      run.id,
+      brandId,
+      campaign.id,
+      group.messages.map((message) => ({
+        email: message.recipientEmail,
+        name: message.recipientName,
+        company: message.recipientCompany,
+        title: message.recipientTitle,
+        domain: message.recipientDomain,
+        sourceUrl: message.sourceUrl,
+        realVerifiedEmail: message.realVerifiedEmail,
+        emailVerification: message.emailVerification,
+      }))
+    );
+    const leadByEmail = new Map(leads.map((lead) => [lead.email.toLowerCase(), lead.id] as const));
+    const createdMessages = await createRunMessages(
+      group.messages.map((message) => {
+        const leadId = leadByEmail.get(message.recipientEmail.toLowerCase());
+        if (!leadId) {
+          throw new Error(`Failed to create run lead for ${message.recipientEmail}.`);
+        }
+        const scheduledAt = addMinutesIso(startAt, globalIndex * minSpacingMinutes);
+        globalIndex += 1;
+        return {
+          runId: run.id,
+          brandId,
+          campaignId: campaign.id,
+          leadId,
+          step: 1,
+          subject: message.subject,
+          body: message.body,
+          status: "scheduled" as const,
+          scheduledAt,
+          sourceType: "conversation" as const,
+          generationMeta: {
+            source: "codex_agent",
+            mode: "agent_authored_warmup",
+            reason: message.reason,
+            senderAccountId,
+            senderEmail,
+            recipientDomain: message.recipientDomain,
+          },
+        };
+      })
+    );
+
+    await updateOutreachRun(run.id, {
+      metrics: {
+        ...run.metrics,
+        sourcedLeads: leads.length,
+        scheduledMessages: createdMessages.length,
+      },
+      lastError: "",
+      pauseReason: "",
+    });
+    await createOutreachEvent({
+      runId: run.id,
+      eventType: "agent_authored_warmup_messages_enqueued",
+      payload: {
+        messageCount: createdMessages.length,
+        senderAccountId,
+        senderEmail,
+        brandId,
+        campaignId: campaign.id,
+        reasons: group.messages.map((message) => message.reason).filter(Boolean).slice(0, 20),
+      },
+    });
+    await Promise.all([
+      enqueueOutreachJob({
+        runId: run.id,
+        jobType: "dispatch_messages",
+        executeAfter: nowIso(),
+      }),
+      enqueueOutreachJob({
+        runId: run.id,
+        jobType: "sync_replies",
+        executeAfter: addMinutesIso(nowIso(), 60),
+      }),
+    ]);
+    runs.push({
+      runId: run.id,
+      campaignId: campaign.id,
+      senderAccountId,
+      senderEmail,
+      leadCount: leads.length,
+      messageCount: createdMessages.length,
+      firstScheduledAt: createdMessages[0]?.scheduledAt ?? "",
+      lastScheduledAt: createdMessages[createdMessages.length - 1]?.scheduledAt ?? "",
+    });
+  }
+
+  return {
+    summary: `Enqueued ${targetMessages.length} agent-authored warmup message${targetMessages.length === 1 ? "" : "s"} across ${runs.length} run${runs.length === 1 ? "" : "s"}.`,
+    result: {
+      brandId,
+      runs,
+      messageCount: targetMessages.length,
+      nextRecommendedTool: "deliverability.probe.start",
+    },
+    receipt: {
+      title: "Warmup messages enqueued",
+      summary: `Scheduled ${targetMessages.length} exact agent-written warmup message${targetMessages.length === 1 ? "" : "s"}.`,
+      details: runs.map((run) => `${run.senderEmail || run.senderAccountId}: ${run.messageCount} message${run.messageCount === 1 ? "" : "s"} in ${run.runId}`),
+    },
+  } satisfies OperatorToolResult;
+}
+
+async function startDeliverabilityProbe(input: Record<string, unknown>) {
+  const brandId = requireString(input, "brandId");
+  const explicitRunId = asString(input.runId);
+  const explicitCampaignId = asString(input.campaignId);
+  let campaign: ScaleCampaignRecord | null = explicitCampaignId
+    ? await getScaleCampaignOrThrow(brandId, explicitCampaignId)
+    : null;
+  let run = explicitRunId ? await getOutreachRun(explicitRunId) : null;
+  if (run && run.brandId !== brandId) throw new Error("Run not found for brand");
+
+  if (!run) {
+    if (!campaign) {
+      const campaigns = await listWarmupCampaignsForBrand(brandId);
+      campaign = await resolveAgentWarmupCampaign({
+        brandId,
+        campaigns,
+        senderAccountId: asString(input.senderAccountId ?? input.accountId),
+        allowNonWarmupCampaign: input.allowNonWarmupCampaign === true,
+      });
+    }
+    const runs = await listOwnerRuns(brandId, "campaign", campaign.id);
+    run = pickRun(runs);
+  }
+  if (!run) {
+    throw new Error("No run exists to probe. Enqueue agent warmup messages or launch a campaign run first.");
+  }
+  if (!campaign) {
+    campaign = await getScaleCampaignOrThrow(brandId, run.campaignId);
+  }
+
+  const probeAll =
+    input.probeAllSenders === true ||
+    asString(input.action) === "probe_all_senders_deliverability";
+  const action = probeAll ? "probe_all_senders_deliverability" : "probe_deliverability";
+  const result = await updateRunControl({
+    brandId,
+    campaignId: run.campaignId,
+    runId: run.id,
+    action,
+    reason:
+      asString(input.reason) ||
+      "Agent requested exact-copy deliverability probe after creating or finding real scheduled copy.",
+    senderAccountId: asString(input.senderAccountId ?? input.accountId) || undefined,
+    recipientEmail: asString(input.recipientEmail) || undefined,
+  });
+  if (!result.ok) throw new Error(result.reason);
+  return {
+    summary: `${campaign.name}: ${result.reason}.`,
+    result: {
+      brandId,
+      campaignId: campaign.id,
+      runId: run.id,
+      action,
+      reason: result.reason,
+    },
+    receipt: {
+      title: "Deliverability probe started",
+      summary: `${campaign.name}: ${result.reason}.`,
+      details: [`Run id: ${run.id}`, `Action: ${action}`],
+    },
+  } satisfies OperatorToolResult;
 }
 
 function normalizeLeadStatus(value: unknown): LeadRow["status"] {
@@ -1438,6 +1902,57 @@ const TOOL_SPECS: OperatorToolSpec[] = [
         result: snapshot as unknown as Record<string, unknown>,
       } satisfies OperatorToolResult;
     },
+  },
+  {
+    name: "plan_warmup_agent_work",
+    riskLevel: "read",
+    approvalMode: "none",
+    description:
+      "Prepare an agent workbench for reply-acquisition warmup. It reads brand context, sender posture, warmup campaigns, recent replies, and the exact enqueue contract. It does not choose recipients or write copy; the agent must do that.",
+    autonomyHint:
+      "Use this when the next move should be agent-conducted warmup. Then choose real recipients and exact subject/body yourself, and call enqueue_warmup_agent_messages.",
+    previewTitle: "Plan warmup agent work",
+    run: planWarmupAgentWork,
+  },
+  {
+    name: "enqueue_warmup_agent_messages",
+    riskLevel: "guarded_write",
+    approvalMode: "confirm",
+    description:
+      "Schedule exact warmup/reply-acquisition emails that the agent already chose and wrote. This is only send plumbing: create run leads, scheduled messages, dispatch/reply jobs, and audit events. It will not generate copy, invent recipients, or choose strategy.",
+    autonomyHint:
+      "Use only after the agent has chosen legitimate recipients and exact subject/body. Keep batches tiny and reply-prone; use start_deliverability_probe after real scheduled copy exists.",
+    previewTitle: "Enqueue agent warmup messages",
+    buildPreview: (input) => {
+      const rawCount = Array.isArray(input.targetMessages)
+        ? input.targetMessages.length
+        : Array.isArray(input.messages)
+          ? input.messages.length
+          : Array.isArray(input.targets)
+            ? input.targets.length
+            : 0;
+      return buildSimplePreview(
+        "Enqueue warmup messages",
+        `Schedule ${rawCount || "agent-authored"} warmup message${rawCount === 1 ? "" : "s"}.`
+      );
+    },
+    run: enqueueWarmupAgentMessages,
+  },
+  {
+    name: "start_deliverability_probe",
+    riskLevel: "guarded_write",
+    approvalMode: "confirm",
+    description:
+      "Start an exact-copy deliverability probe for an existing warmup/campaign run. The run must already contain real scheduled or sent message copy.",
+    autonomyHint:
+      "Use after agent-authored warmup messages or real campaign messages exist, especially before ramping or when placement evidence is stale.",
+    previewTitle: "Start deliverability probe",
+    buildPreview: (input) =>
+      buildSimplePreview(
+        "Start deliverability probe",
+        `${asString(input.action) || (input.probeAllSenders === true ? "probe_all_senders_deliverability" : "probe_deliverability")} for ${asString(input.runId) || asString(input.campaignId) || "the latest warmup run"}.`
+      ),
+    run: startDeliverabilityProbe,
   },
   {
     name: "source_airscale_people",

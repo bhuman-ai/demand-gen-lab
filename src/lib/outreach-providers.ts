@@ -2735,7 +2735,7 @@ export function evaluateLeadAgainstQualityPolicy(input: {
     input.policy.allowRoleInboxes === true &&
     hasSourceUrl &&
     sourceDomainMatchesLead &&
-    hasIndependentPersonEvidence
+    (hasIndependentPersonEvidence || isLikelyRoleInbox(local))
   ) {
     return {
       email,
@@ -2747,6 +2747,7 @@ export function evaluateLeadAgainstQualityPolicy(input: {
         emailVerification,
         policyBypass: "first_party_warmup_public_email",
         sourceDomain,
+        roleInbox: isLikelyRoleInbox(local),
       },
     };
   }

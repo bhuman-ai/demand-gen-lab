@@ -660,6 +660,9 @@ function getLeadEmailSuppressionReasonForTrafficLane(
   if (trafficLane === "warmup" && isWarmupSeedLead(lead)) {
     return "";
   }
+  if (trafficLane === "warmup" && getLeadEmailSuppressionReason(email) === "role_account") {
+    return "";
+  }
   return getLeadEmailSuppressionReason(email);
 }
 
@@ -679,7 +682,9 @@ function isLeadSendableForTrafficLane(
       return false;
     }
     if (getLeadEmailSuppressionReason(email)) {
-      return false;
+      if (getLeadEmailSuppressionReason(email) !== "role_account") {
+        return false;
+      }
     }
     return evaluateLeadAgainstQualityPolicy({
       lead: {

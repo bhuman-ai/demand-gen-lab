@@ -164,6 +164,10 @@ const WARMUP_OPERATING_GUIDE = {
     "If the inbox has no current placement proof, run or inspect exact-copy seed probes before prospect ramp.",
     "If a warmup campaign has no sendable inventory or repeated prep failures, inspect campaign/readiness evidence before retrying the same move.",
     "If the blocker is sourcing/provider-specific, do not treat that as no possible move. Inspect the tool catalog and choose another lead-source route such as Airscale when the brand/campaign context gives enough filters.",
+    "When reply acquisition is the right move, use warmup.agent.plan, choose real recipients yourself, write the exact subject/body yourself, then use warmup.agent.enqueue_messages only as the audited send hand.",
+    "After agent-authored warmup messages exist, use deliverability.probe.start to test the exact copy rather than relying on synthetic probe language.",
+    "Use reply.check or the inbox summary to evaluate whether the warmup work produced real replies before increasing cold volume.",
+    "Do not wait for campaignHopper or a legacy worker to invent the warmup work. The agent owns target choice, message writing, and next-step judgment.",
     "If a move repeats without improving replies, placement, or state, write that in self-reflection and choose a different move.",
   ],
 } as const;

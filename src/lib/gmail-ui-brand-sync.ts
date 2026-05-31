@@ -79,6 +79,10 @@ function scoreCandidate(candidate: Candidate, currentAssignmentId: string) {
   return score;
 }
 
+function accountShouldStayOnExistingTransport(account: OutreachAccount) {
+  return account.config.mailbox.deliveryMethod !== "gmail_ui";
+}
+
 function assignedAccountIds(assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>) {
   return Array.from(
     new Set(
@@ -151,31 +155,44 @@ export async function syncBrandGmailUiAssignments(options?: {
       existingUserDataDir: chosen.account.config.mailbox.gmailUiUserDataDir,
       email: fromEmail,
     });
-    await mkdir(userDataDir, { recursive: true });
+    const preserveExistingTransport = accountShouldStayOnExistingTransport(chosen.account);
+    if (!preserveExistingTransport) {
+      await mkdir(userDataDir, { recursive: true });
+    }
 
     const loginStatus = normalizeGmailUiLoginStatus({
-      deliveryMethod: "gmail_ui",
+      deliveryMethod: preserveExistingTransport ? chosen.account.config.mailbox.deliveryMethod : "gmail_ui",
       state: chosen.account.config.mailbox.gmailUiLoginState,
       checkedAt: chosen.account.config.mailbox.gmailUiLoginCheckedAt,
-      message: chosen.account.config.mailbox.gmailUiLoginMessage,
-      forceLoginRequired: rehomedProfile,
+      message: preserveExistingTransport
+        ? "Existing non-Gmail transport is ready, so Gmail UI sync did not change the sender route."
+        : chosen.account.config.mailbox.gmailUiLoginMessage,
+      forceLoginRequired: !preserveExistingTransport && rehomedProfile,
     });
 
     const updated = await updateOutreachAccount(chosen.account.id, {
       status: "active",
       config: {
-        mailbox: {
-          provider: "gmail",
-          deliveryMethod: "gmail_ui",
-          email: fromEmail,
-          status: chosen.account.config.mailpool.status === "active" ? "connected" : "disconnected",
-          gmailUiUserDataDir: userDataDir,
-          gmailUiProfileDirectory: "",
-          gmailUiBrowserChannel: "chrome",
-          gmailUiLoginState: loginStatus.gmailUiLoginState,
-          gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
-          gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
-        },
+        mailbox: preserveExistingTransport
+          ? {
+              email: fromEmail,
+              status: chosen.account.config.mailpool.status === "active" ? "connected" : "disconnected",
+              gmailUiLoginState: loginStatus.gmailUiLoginState,
+              gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
+              gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
+            }
+          : {
+              provider: "gmail",
+              deliveryMethod: "gmail_ui",
+              email: fromEmail,
+              status: chosen.account.config.mailpool.status === "active" ? "connected" : "disconnected",
+              gmailUiUserDataDir: userDataDir,
+              gmailUiProfileDirectory: "",
+              gmailUiBrowserChannel: "chrome",
+              gmailUiLoginState: loginStatus.gmailUiLoginState,
+              gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
+              gmailUiLoginMessage: loginStatus.gmailUiLoginMessage,
+            },
       },
     });
 
@@ -183,12 +200,14 @@ export async function syncBrandGmailUiAssignments(options?: {
       warnings.push(`${brand.name}: failed to update account ${chosen.account.id}`);
       continue;
     }
-    const proxied = await ensureRequiredWebshareProxy(updated).catch((error) => {
-      warnings.push(
-        `${brand.name}: ${error instanceof Error ? error.message : "proxy assignment failed"}`
-      );
-      return updated;
-    });
+    const proxied = preserveExistingTransport
+      ? updated
+      : await ensureRequiredWebshareProxy(updated).catch((error) => {
+          warnings.push(
+            `${brand.name}: ${error instanceof Error ? error.message : "proxy assignment failed"}`
+          );
+          return updated;
+        });
 
     const currentPrimaryAccount = assignment?.accountId
       ? accountById.get(assignment.accountId) ?? null
@@ -282,7 +301,7 @@ export async function syncBrandGmailUiAssignments(options?: {
       accountStatus: proxied.status,
       mailpoolStatus: proxied.config.mailpool.status,
       proxyHost: proxied.config.mailbox.proxyHost,
-      userDataDir,
+      userDataDir: preserveExistingTransport ? "" : userDataDir,
       warning,
     });
   }

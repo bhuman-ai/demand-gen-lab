@@ -371,20 +371,7 @@ export async function syncMailpoolOutreachAccountCredentials(accountId: string):
     return updated ?? account;
   }
 
-  const providerError = mailpoolMailboxErrorMessage(mailbox);
-  const disabled = shouldDisableMailpoolAccount(mailbox) || hasBlockingGmailUiLoginState(account.config);
-  const updated = await updateOutreachAccount(account.id, {
-    status: disabled ? ("inactive" as const) : ("active" as const),
-    config: {
-      mailpool: {
-        status: mailpoolMailboxResourceStatus(mailbox),
-      },
-      mailbox: {
-        ...(providerError ? { gmailUiLoginState: "error" as const, gmailUiLoginMessage: providerError } : {}),
-      },
-    },
-    credentials: buildMailpoolMailboxCredentials(mailbox),
-  });
+  const updated = await updateOutreachAccount(account.id, buildMailpoolAccountPatch(mailbox, account.config));
   return updated ?? account;
 }
 

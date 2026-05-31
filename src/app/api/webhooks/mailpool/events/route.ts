@@ -38,17 +38,41 @@ function gmailUiProfileDir(fromEmail: string) {
   return buildGmailUiUserDataDir(root, fromEmail);
 }
 
+function mailboxHasSmtpCredentials(mailbox: MailpoolMailbox) {
+  return Boolean(
+    String(mailbox.smtpHost ?? "").trim() &&
+      String(mailbox.smtpUsername ?? "").trim() &&
+      String(mailbox.imapHost ?? "").trim() &&
+      String(mailbox.status ?? "").trim().toLowerCase() === "active" &&
+      (String(mailbox.smtpPassword ?? "").trim() || String(mailbox.password ?? "").trim())
+  );
+}
+
 function mailboxConfigFromMailpool(
   mailbox: MailpoolMailbox,
   existingConfig?: OutreachAccountConfig | null
 ): OutreachAccountConfig {
   const fromEmail = mailbox.email.trim().toLowerCase();
-  const usesGmailUi = wantsWebshareProxy();
+  const wantsGmailUi = wantsWebshareProxy();
+  const existingGmailUiStatus = normalizeGmailUiLoginStatus({
+    deliveryMethod: "gmail_ui",
+    state: existingConfig?.mailbox.gmailUiLoginState,
+    checkedAt: existingConfig?.mailbox.gmailUiLoginCheckedAt,
+    message: existingConfig?.mailbox.gmailUiLoginMessage,
+    forceLoginRequired: !String(existingConfig?.mailbox.gmailUiUserDataDir ?? "").trim(),
+  });
+  const useSmtpFallback = Boolean(
+    mailboxHasSmtpCredentials(mailbox) &&
+      (existingConfig?.mailbox.deliveryMethod === "smtp" || existingGmailUiStatus.gmailUiLoginState !== "ready")
+  );
+  const usesGmailUi = wantsGmailUi && !useSmtpFallback;
   const loginStatus = normalizeGmailUiLoginStatus({
     deliveryMethod: usesGmailUi ? "gmail_ui" : "smtp",
     state: existingConfig?.mailbox.gmailUiLoginState,
     checkedAt: existingConfig?.mailbox.gmailUiLoginCheckedAt,
-    message: existingConfig?.mailbox.gmailUiLoginMessage,
+    message: useSmtpFallback
+      ? "Mailpool SMTP is available, so webhook sync kept delivery off Gmail UI."
+      : existingConfig?.mailbox.gmailUiLoginMessage,
     forceLoginRequired: usesGmailUi && !String(existingConfig?.mailbox.gmailUiUserDataDir ?? "").trim(),
   });
   return {

@@ -6,7 +6,9 @@ import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import {
   createOutreachAccount,
+  getOutreachAccountSecrets,
   listOutreachAccounts,
+  type OutreachAccountSecrets,
   updateOutreachAccount,
 } from "@/lib/outreach-data";
 import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
@@ -40,7 +42,8 @@ function gmailUiProfileDir(fromEmail: string) {
 
 function mailboxHasSmtpCredentials(
   mailbox: MailpoolMailbox,
-  existingConfig?: OutreachAccountConfig | null
+  existingConfig?: OutreachAccountConfig | null,
+  existingSecrets?: OutreachAccountSecrets | null
 ) {
   const smtpHost =
     String(mailbox.smtpHost ?? "").trim() || String(existingConfig?.mailbox.smtpHost ?? "").trim();
@@ -59,13 +62,16 @@ function mailboxHasSmtpCredentials(
       mailboxActive &&
       (String(mailbox.smtpPassword ?? "").trim() ||
         String(mailbox.password ?? "").trim() ||
+        String(existingSecrets?.mailboxSmtpPassword ?? "").trim() ||
+        String(existingSecrets?.mailboxPassword ?? "").trim() ||
         existingConfig?.mailbox.deliveryMethod === "smtp")
   );
 }
 
 function mailboxConfigFromMailpool(
   mailbox: MailpoolMailbox,
-  existingConfig?: OutreachAccountConfig | null
+  existingConfig?: OutreachAccountConfig | null,
+  existingSecrets?: OutreachAccountSecrets | null
 ): OutreachAccountConfig {
   const fromEmail = mailbox.email.trim().toLowerCase();
   const imapHost =
@@ -85,7 +91,7 @@ function mailboxConfigFromMailpool(
     forceLoginRequired: !String(existingConfig?.mailbox.gmailUiUserDataDir ?? "").trim(),
   });
   const useSmtpFallback = Boolean(
-    mailboxHasSmtpCredentials(mailbox, existingConfig) &&
+    mailboxHasSmtpCredentials(mailbox, existingConfig, existingSecrets) &&
       (existingConfig?.mailbox.deliveryMethod === "smtp" || existingGmailUiStatus.gmailUiLoginState !== "ready")
   );
   const usesGmailUi = wantsGmailUi && !useSmtpFallback;
@@ -161,7 +167,8 @@ async function reconcileMailbox(mailbox: MailpoolMailbox, deleted = false) {
     accounts.find((account) => account.config.mailpool.mailboxId === mailbox.id) ??
     accounts.find((account) => getOutreachAccountFromEmail(account).trim().toLowerCase() === mailbox.email.trim().toLowerCase()) ??
     null;
-  const nextConfig = mailboxConfigFromMailpool(mailbox, existing?.config);
+  const existingSecrets = existing ? await getOutreachAccountSecrets(existing.id) : null;
+  const nextConfig = mailboxConfigFromMailpool(mailbox, existing?.config, existingSecrets);
   const usesGmailUi = nextConfig.mailbox.deliveryMethod === "gmail_ui";
 
   const patch = {

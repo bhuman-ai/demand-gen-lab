@@ -83,6 +83,22 @@ function accountShouldStayOnExistingTransport(account: OutreachAccount) {
   return account.config.mailbox.deliveryMethod !== "gmail_ui";
 }
 
+function accountTransportIsReadyForAssignment(account: OutreachAccount) {
+  if (account.status !== "active") return false;
+  if (account.config.mailbox.status !== "connected") return false;
+  if (account.config.mailbox.deliveryMethod === "gmail_ui") {
+    return (
+      normalizeGmailUiLoginStatus({
+        deliveryMethod: account.config.mailbox.deliveryMethod,
+        state: account.config.mailbox.gmailUiLoginState,
+        checkedAt: account.config.mailbox.gmailUiLoginCheckedAt,
+        message: account.config.mailbox.gmailUiLoginMessage,
+      }).gmailUiLoginState === "ready"
+    );
+  }
+  return true;
+}
+
 function assignedAccountIds(assignment: Awaited<ReturnType<typeof getBrandOutreachAssignment>>) {
   return Array.from(
     new Set(
@@ -215,7 +231,7 @@ export async function syncBrandGmailUiAssignments(options?: {
     if (
       currentPrimaryAccount &&
       currentPrimaryAccount.id !== proxied.id &&
-      currentPrimaryAccount.status === "active" &&
+      accountTransportIsReadyForAssignment(currentPrimaryAccount) &&
       !isGoogleMailpoolAccount(currentPrimaryAccount)
     ) {
       const currentMailboxAccountId =
@@ -245,7 +261,11 @@ export async function syncBrandGmailUiAssignments(options?: {
     );
     const chosenSignal = signalsByAccountId.get(proxied.id) ?? null;
     const currentSignals = assignedAccountIds(assignment)
-      .map((accountId) => signalsByAccountId.get(accountId) ?? null)
+      .map((accountId) => {
+        const account = accountById.get(accountId) ?? null;
+        if (account && !accountTransportIsReadyForAssignment(account)) return null;
+        return signalsByAccountId.get(accountId) ?? null;
+      })
       .filter((signal): signal is NonNullable<typeof signal> => Boolean(signal));
     const bestCurrentSignal =
       rankSenderRoutingSignals(currentSignals).find((signal) => signal.automationStatus !== "attention") ??

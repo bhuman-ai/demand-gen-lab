@@ -89,11 +89,18 @@ const WARMUP_OPERATING_GUIDE = {
     "Warmup is not a day-by-day script. Treat it as an agent-run reply acquisition and inbox-trust loop. Use the evidence snapshot, choose the next legitimate move, and write self-reflection when the same move repeats without changing outcomes.",
   model:
     "The sender should look and behave like a real working mailbox because it is one: real inbound, real replies, real vendor/support/partner conversations, exact-copy seed probes, then tiny reply-focused outreach.",
+  emailSetupPrinciples: [
+    "Sender setup and warmup are separate questions. First prove the sender route can send and receive. Then prove exact campaign bodies land acceptably. Then earn real replies before any ramp.",
+    "A sender can be technically ready but still not reputation-ready. Ready transport only means the route can send; it does not mean cold volume should start.",
+    "When sender reputation is weak or placement is poor, prefer reply acquisition, controlled business threads, route/provider checks, and exact-copy placement tests over more cold sends.",
+    "If no campaign or warmup inventory is sendable, the agent should inspect campaign readiness and prep state before blaming the sender.",
+  ],
   decisionQuestions: [
     "What would a real operator with this brand and this inbox do today to get a useful reply?",
     "What evidence says this sender is gaining trust, stalling, or getting worse?",
     "Which move creates legitimate conversation instead of fake activity?",
     "What should be tested with the real campaign body before any prospect ramp?",
+    "Is this a sender reputation problem, a campaign/readiness problem, a list/prep problem, a provider problem, or a missing platform capability?",
   ],
   capabilityMoves: [
     {
@@ -155,6 +162,7 @@ const WARMUP_OPERATING_GUIDE = {
     "Do not create fake brands, fake personas, fake buyer intent, or fake warmup loops.",
     "Prefer one legitimate reply-prone action over many low-signal sends.",
     "If the inbox has no current placement proof, run or inspect exact-copy seed probes before prospect ramp.",
+    "If a warmup campaign has no sendable inventory or repeated prep failures, inspect campaign/readiness evidence before retrying the same move.",
     "If a move repeats without improving replies, placement, or state, write that in self-reflection and choose a different move.",
   ],
 } as const;

@@ -40,6 +40,30 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
   },
   {
+    name: "lastb2b.brand.investigate",
+    operatorToolName: "investigate_brand_data",
+    title: "Investigate brand workspace",
+    description:
+      "Read raw brand workspace evidence across campaigns, prep tasks, runs, events, messages, leads, replies, experiments, and sender context when the compact snapshot is not enough.",
+    provider: "lastb2b",
+    category: "analytics",
+    capability: "inspect_state",
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        query: stringProp("Investigation question"),
+        threadId: stringProp("Optional reply thread id"),
+        runId: stringProp("Optional outreach run id"),
+        leadId: stringProp("Optional lead id"),
+        campaignId: stringProp("Optional campaign id"),
+        maxThreads: numberProp("Maximum reply threads to include"),
+        maxMessages: numberProp("Maximum messages or leads to include per section"),
+        maxRuns: numberProp("Maximum runs to include"),
+      },
+      ["brandId"]
+    ),
+  },
+  {
     name: "lastb2b.sender.snapshot",
     operatorToolName: "get_sender_snapshot",
     title: "Inspect sender state",

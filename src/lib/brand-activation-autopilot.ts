@@ -10,6 +10,7 @@ import {
   updateScaleCampaignRecord,
 } from "@/lib/experiment-data";
 import { invokeGrowthTool, listGrowthToolCatalog } from "@/lib/growth-tool-registry";
+import { getWarmupOperatingGuide } from "@/lib/warmup-intelligence";
 import {
   createMission,
   createMissionAgentDecision,
@@ -1138,6 +1139,71 @@ function snapshotNeedsInboxPlacementTest(snapshot: BrandActivationSnapshot) {
   return statusNeedsInboxPlacementTest(snapshot.outreach);
 }
 
+function inventoryNeedsWarmupOrPrepReasoning(
+  inventory: OutreachBrandStatus["inventorySummary"]
+) {
+  const prepFailed = Boolean(
+    inventory.inventoryBlockerCode === "campaign_prep_failed" ||
+      inventory.prepTaskStatus === "failed" ||
+      inventory.prepTaskBlockerCode !== "none" ||
+      inventory.prepTaskLastError
+  );
+  const prepRepeating = inventory.prepTaskAttempt >= 2;
+  const prepPendingAgain = Boolean(
+    prepRepeating &&
+      (inventory.prepTaskStatus === "queued" ||
+        inventory.prepTaskStatus === "running" ||
+        inventory.inventoryBlockerCode === "campaign_prep_queued" ||
+        inventory.inventoryBlockerCode === "campaign_prep_running")
+  );
+  const noUsefulInventory = Boolean(
+    !inventory.inventoryDispatchable &&
+      (inventory.inventoryHealth === "empty" ||
+        inventory.inventoryHealth === "stale" ||
+        inventory.inventoryHealth === "insufficient" ||
+        inventory.inventoryBlockerCode !== "none")
+  );
+  return Boolean(noUsefulInventory && (prepFailed || prepPendingAgain || prepRepeating));
+}
+
+function statusNeedsWarmupOrPrepReasoning(
+  status: Pick<
+    OutreachBrandStatus,
+    | "campaignSummary"
+    | "experimentSummary"
+    | "inventorySummary"
+    | "primaryBlockerCode"
+    | "primaryBlockerDomain"
+    | "senderSummary"
+  >
+) {
+  const inventory = status.inventorySummary;
+  const warmupContext = Boolean(
+    inventory.inventorySourceKind === "warmup" || status.campaignSummary.activeWarmupCampaignCount > 0
+  );
+  const prepContext = inventoryNeedsWarmupOrPrepReasoning(inventory);
+  const noPromotableButReadyToReason = Boolean(
+    status.primaryBlockerCode === "no_promotable_winner" &&
+      status.senderSummary.readySenderCount > 0 &&
+      (status.campaignSummary.activeWarmupCampaignCount > 0 ||
+        status.campaignSummary.pausedOutboundCampaignCount > 0 ||
+        status.experimentSummary.readyExperimentCount > 0 ||
+        status.experimentSummary.promotionReadyCount > 0)
+  );
+  const warmupNoInventory = Boolean(
+    warmupContext &&
+      !inventory.inventoryDispatchable &&
+      (inventory.inventoryHealth === "empty" ||
+        inventory.inventoryHealth === "stale" ||
+        inventory.inventoryBlockerCode !== "none")
+  );
+  return Boolean(prepContext || warmupNoInventory || noPromotableButReadyToReason);
+}
+
+function snapshotNeedsWarmupOrPrepReasoning(snapshot: BrandActivationSnapshot) {
+  return statusNeedsWarmupOrPrepReasoning(snapshot.outreach);
+}
+
 function routeEvidenceHasPlacement(
   evidence: OutreachBrandStatus["senderRouteEvidence"][number]
 ) {
@@ -1516,6 +1582,67 @@ function summarizeSenderDeliveryRepair(snapshot: BrandActivationSnapshot) {
     fromEmail: route?.fromEmail ?? "",
     state: route?.state ?? "",
     recommendedAction: due && route ? "refresh_mailpool_sender" : "",
+  };
+}
+
+function summarizeWarmupAndPrepReasoning(snapshot: BrandActivationSnapshot) {
+  const due = snapshotNeedsWarmupOrPrepReasoning(snapshot);
+  const inventory = snapshot.outreach.inventorySummary;
+  const query =
+    "Warmup or campaign prep is blocking autonomous progress. Classify whether this is sender reputation, campaign/readiness, list/prep, provider, or missing capability; inspect recent campaigns, prep tasks, runs, events, and exact-copy placement before choosing the next action.";
+  return {
+    due,
+    reason: due
+      ? "Warmup/campaign inventory is not dispatchable or no experiment is promotable, so the agent should inspect the campaign and warmup evidence before retrying the same move."
+      : "",
+    classificationQuestion:
+      "Is this actually sender reputation, campaign/readiness, list/prep, provider, or missing platform capability?",
+    recommendedReadTools: due
+      ? [
+          {
+            toolName: "sender.warmup.snapshot",
+            input: { brandId: snapshot.brand.id },
+          },
+          {
+            toolName: "lastb2b.brand.investigate",
+            input: {
+              brandId: snapshot.brand.id,
+              campaignId: inventory.inventoryOwnerType === "campaign" ? inventory.inventoryOwnerId : "",
+              query,
+              maxRuns: 6,
+              maxMessages: 12,
+            },
+          },
+        ]
+      : [],
+    inventory: {
+      sourceKind: inventory.inventorySourceKind,
+      ownerType: inventory.inventoryOwnerType,
+      ownerId: inventory.inventoryOwnerId,
+      health: inventory.inventoryHealth,
+      dispatchable: inventory.inventoryDispatchable,
+      blockerCode: inventory.inventoryBlockerCode,
+      blockerSummary: inventory.inventoryBlockerSummary,
+      prepTaskStatus: inventory.prepTaskStatus,
+      prepTaskAttempt: inventory.prepTaskAttempt,
+      prepTaskBlockerCode: inventory.prepTaskBlockerCode,
+      prepTaskSummary: inventory.prepTaskSummary,
+      prepTaskLastError: inventory.prepTaskLastError,
+      campaignOwnedSendableLeadCount: inventory.campaignOwnedSendableLeadCount,
+      experimentOwnedSendableLeadCount: inventory.experimentOwnedSendableLeadCount,
+    },
+    campaignSummary: {
+      activeWarmupCampaignCount: snapshot.outreach.campaignSummary.activeWarmupCampaignCount,
+      activeOutboundCampaignCount: snapshot.outreach.campaignSummary.activeOutboundCampaignCount,
+      pausedOutboundCampaignCount: snapshot.outreach.campaignSummary.pausedOutboundCampaignCount,
+      readyOutboundCampaignCount: snapshot.outreach.campaignSummary.readyOutboundCampaignCount,
+      activeOutboundCampaignId: snapshot.outreach.campaignSummary.activeOutboundCampaignId,
+    },
+    experimentSummary: {
+      readyExperimentCount: snapshot.outreach.experimentSummary.readyExperimentCount,
+      promotionReadyCount: snapshot.outreach.experimentSummary.promotionReadyCount,
+      promotionBlocker: snapshot.outreach.experimentSummary.promotionBlocker,
+    },
   };
 }
 
@@ -2077,6 +2204,9 @@ function snapshotNeedsAutonomousWork(snapshot: BrandActivationSnapshot) {
   if (snapshot.seedPool.needsRepair) {
     return true;
   }
+  if (snapshotNeedsWarmupOrPrepReasoning(snapshot)) {
+    return true;
+  }
   if (snapshotNeedsTransportFallback(snapshot)) {
     return true;
   }
@@ -2131,6 +2261,7 @@ function summarizeEligibleWork(snapshots: BrandActivationSnapshot[]) {
       campaignLaunch: summarizeCampaignLaunch(snapshot),
       providerErrorRepair: summarizeProviderErrorRepair(snapshot),
       senderDeliveryRepair: summarizeSenderDeliveryRepair(snapshot),
+      warmupAndPrep: summarizeWarmupAndPrepReasoning(snapshot),
       transportFallback: summarizeTransportFallback(snapshot),
       transportPromotion: summarizeVerifiedTransportPromotion(snapshot),
       seedPool: snapshot.seedPool,
@@ -2196,6 +2327,7 @@ async function filterSnapshotsDueForPlanning(snapshots: BrandActivationSnapshot[
 
   const due = eligible.filter((snapshot) => {
     if (
+      snapshotNeedsWarmupOrPrepReasoning(snapshot) ||
       snapshotNeedsTransportFallback(snapshot) ||
       snapshotNeedsVerifiedTransportPromotion(snapshot) ||
       snapshotNeedsCampaignLaunch(snapshot) ||
@@ -2244,6 +2376,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
       const missionPriority = status.campaignSummary.activeOutboundCampaignCount === 0 ? 40 : 0;
       const blockedPriority = status.primaryBlockerDomain === "sender" ? 25 : 0;
       const placementPriority = statusNeedsInboxPlacementTest(status) ? 35 : 0;
+      const warmupPrepPriority = statusNeedsWarmupOrPrepReasoning(status) ? 85 : 0;
       const transportFallbackPriority = statusNeedsTransportFallback(status) ? 70 : 0;
       const transportPromotionPriority = statusNeedsVerifiedTransportPromotion(status) ? 80 : 0;
       const campaignLaunchPriority = statusNeedsCampaignLaunch(status) ? 65 : 0;
@@ -2253,6 +2386,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
       const livePenalty =
         hasOpenOutboundWork(status) &&
         placementPriority === 0 &&
+        warmupPrepPriority === 0 &&
         transportFallbackPriority === 0 &&
         transportPromotionPriority === 0 &&
         campaignLaunchPriority === 0 &&
@@ -2268,6 +2402,7 @@ async function buildSnapshots(config: ActivationConfig): Promise<BrandActivation
           missionPriority +
           blockedPriority +
           placementPriority +
+          warmupPrepPriority +
           transportFallbackPriority +
           transportPromotionPriority +
           campaignLaunchPriority +
@@ -2330,6 +2465,7 @@ async function planActivationWithLlm(input: {
     maxActionsPerTick: Math.max(0, remainingCapacity),
   };
   const eligibleWork = summarizeEligibleWork(planningSnapshots);
+  const warmupOperatingGuide = getWarmupOperatingGuide();
 
   if (evidenceFirstPlan.actions.length > 0 && (planningConfig.maxActionsPerTick <= 0 || eligibleWork.length === 0)) {
     return {
@@ -2375,6 +2511,7 @@ async function planActivationWithLlm(input: {
     "- Never invent IDs, LinkedIn account IDs, campaign URLs, managed table IDs, run IDs, or message copy. If a required input is unknown, inspect state first or choose observe.",
     "- Prefer actual campaign copy for delivery, email, and LinkedIn outreach tools. Do not use synthetic probe copy for deliverability-sensitive decisions.",
     "- Treat warmup as reply acquisition and inbox trust, not a calendar ladder. When sender reputation is the question, inspect sender.warmup.snapshot and choose a legitimate next move from evidence.",
+    "- For confusing blocker chains, use read tools such as lastb2b.brand.snapshot, lastb2b.brand.investigate, sender.warmup.snapshot, campaign snapshots, and sender delivery evidence before choosing a write/send/provision action.",
     "- Spend-risk or reputation-risk tools may be blocked by runtime guardrails; still choose them when they are the correct action and the evidence supports it.",
     "",
     "Decision rules:",
@@ -2388,6 +2525,8 @@ async function planActivationWithLlm(input: {
     "- If primaryBlockerCode is provider_error_rate and activeOutboundRunId exists, choose repair_outreach_run. This lets the runtime recheck the provider anomaly, fail over to a healthier sender when available, and resume safely.",
     "- If an active run needs more prospects, has inventory/top-up errors, or is below the intended batch size, choose source_more_leads and set runTool.targetLeadCount to the desired total sendable leads for that run.",
     "- If senderOutboundEnablement.due is true, choose use_growth_tool with sender.enable_outbound and the provided accountId. Do this before campaign.launch_email_run; a warmup-only ready sender will block real outbound launches.",
+    "- If warmupAndPrep.due is true, first classify the blocker as sender reputation, campaign/readiness, list/prep, provider, or missing capability. If the evidence is not enough, choose use_growth_tool with sender.warmup.snapshot or lastb2b.brand.investigate. Do not blindly retry the same prep/source/warmup action when attempts or errors show it is looping.",
+    "- If no_promotable_winner appears while ready senders exist, reason about experiment/campaign readiness and inventory before assuming sender reputation is the blocker.",
     "- If activeOutboundCampaignId is present, readyOutboundCampaignCount > 0, there is no activeOutboundRunId/open run, and sender/inventory state is not structurally blocked, choose use_growth_tool with campaign.launch_email_run. Do not wait for a human to press launch.",
     "- If primaryBlockerCode is missing_delivery_credentials or gmail_ui_login_required for a Mailpool Gmail UI route, choose refresh_mailpool_sender with refreshAccountId. The runtime will refresh Mailpool and switch to SMTP automatically when SMTP credentials are available.",
     "- If seedPool.needsRepair is true, prefer repair_seed_pool before trying more inbox placement tests. This is infrastructure repair; do not also create missions or provision senders in the same action.",
@@ -2414,6 +2553,7 @@ async function planActivationWithLlm(input: {
     `allowReputationGrowthTools: ${planningConfig.allowReputationGrowthTools}`,
     `maxActions: ${planningConfig.maxActionsPerTick}`,
     `hasRegistrantForDomainPurchases: ${Boolean(planningConfig.registrant)}`,
+    `warmupOperatingGuide JSON: ${JSON.stringify(warmupOperatingGuide)}`,
     `evidenceFirstActionsAlreadyPlanned JSON: ${JSON.stringify(evidenceFirstPlan.actions)}`,
     `growthToolCatalog JSON: ${JSON.stringify(growthToolCatalog)}`,
     `eligibleWork JSON: ${JSON.stringify(eligibleWork)}`,
@@ -2561,7 +2701,13 @@ async function planActivationWithLlm(input: {
                             campaignUrl: { type: "string" },
                             managedTableId: { type: "string" },
                             message: { type: "string" },
+                            query: { type: "string" },
+                            threadId: { type: "string" },
+                            leadId: { type: "string" },
                             limit: { type: "number" },
+                            maxThreads: { type: "number" },
+                            maxMessages: { type: "number" },
+                            maxRuns: { type: "number" },
                             targetLeadCount: { type: "number" },
                             workflowActionOrder: {
                               type: "array",

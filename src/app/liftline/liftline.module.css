@@ -1,0 +1,538 @@
+.page {
+  --ll-bg: #f4f1ea;
+  --ll-ink: #17211b;
+  --ll-muted: #647067;
+  --ll-surface: #fffdf8;
+  --ll-border: #d8d0c4;
+  --ll-border-strong: #b9ad9f;
+  --ll-green: #1f6a43;
+  --ll-green-dark: #174b32;
+  --ll-green-soft: #e0eee5;
+  --ll-clay: #b65f3a;
+  --ll-clay-soft: #f5e5db;
+  min-height: 100vh;
+  background: var(--ll-bg);
+  color: var(--ll-ink);
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+.hero {
+  min-height: min(760px, 82svh);
+  background:
+    linear-gradient(90deg, rgba(244, 241, 234, 0.96) 0%, rgba(244, 241, 234, 0.84) 36%, rgba(244, 241, 234, 0.1) 72%),
+    url("/liftline/hero-workspace.png");
+  background-position: center;
+  background-size: cover;
+  border-bottom: 1px solid var(--ll-border);
+}
+
+.nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 24px;
+  width: min(1180px, calc(100% - 40px));
+  min-height: 72px;
+  margin: 0 auto;
+}
+
+.brand,
+.navLinks,
+.navCta,
+.primaryButton,
+.secondaryButton,
+.inlineLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: start;
+  font-size: 16px;
+  font-weight: 760;
+}
+
+.brandMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--ll-green);
+  color: var(--ll-surface);
+  font-weight: 780;
+}
+
+.navLinks {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  color: var(--ll-muted);
+  font-size: 14px;
+}
+
+.navLinks a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.navLinks a:hover {
+  color: var(--ll-ink);
+}
+
+.navCta {
+  justify-self: end;
+  border: 1px solid rgba(23, 33, 27, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.82);
+  padding: 10px 14px;
+  color: var(--ll-ink);
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.navCta:hover {
+  border-color: var(--ll-border-strong);
+  background: var(--ll-surface);
+}
+
+.heroInner {
+  display: grid;
+  align-items: center;
+  width: min(1180px, calc(100% - 40px));
+  min-height: calc(min(760px, 82svh) - 72px);
+  margin: 0 auto;
+  padding: 44px 0 76px;
+}
+
+.heroCopy {
+  max-width: 560px;
+}
+
+.heroCopy h1 {
+  margin: 0;
+  color: var(--ll-ink);
+  font-family: var(--font-brand), var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(4.8rem, 13vw, 10.5rem);
+  font-weight: 760;
+  line-height: 0.82;
+  letter-spacing: 0;
+}
+
+.heroLead {
+  max-width: 540px;
+  margin: 28px 0 0;
+  color: color-mix(in oklab, var(--ll-ink) 78%, var(--ll-muted) 22%);
+  font-size: clamp(1.15rem, 2.2vw, 1.55rem);
+  line-height: 1.42;
+}
+
+.heroActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.primaryButton,
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.primaryButton {
+  border: 1px solid var(--ll-green);
+  background: var(--ll-green);
+  color: var(--ll-surface);
+}
+
+.primaryButton:hover {
+  border-color: var(--ll-green-dark);
+  background: var(--ll-green-dark);
+}
+
+.secondaryButton {
+  border: 1px solid rgba(23, 33, 27, 0.18);
+  background: rgba(255, 253, 248, 0.78);
+  color: var(--ll-ink);
+}
+
+.secondaryButton:hover {
+  border-color: var(--ll-border-strong);
+  background: var(--ll-surface);
+}
+
+.buttonIcon,
+.linkIcon,
+.stripIcon,
+.stepIcon {
+  width: 17px;
+  height: 17px;
+}
+
+.proofStrip,
+.section,
+.productSection,
+.finalCta {
+  width: min(1180px, calc(100% - 40px));
+  margin-inline: auto;
+}
+
+.proofStrip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--ll-border);
+  border-radius: 8px;
+  background: var(--ll-border);
+  transform: translateY(-34px);
+}
+
+.proofStrip div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 66px;
+  background: var(--ll-surface);
+  padding: 0 18px;
+  color: var(--ll-ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.stripIcon {
+  flex: 0 0 auto;
+  color: var(--ll-green);
+}
+
+.section {
+  padding: 48px 0;
+}
+
+.sectionHeader {
+  max-width: 760px;
+}
+
+.sectionHeader h2,
+.productCopy h2,
+.finalCta h2 {
+  margin: 0;
+  color: var(--ll-ink);
+  font-family: var(--font-brand), var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(2.2rem, 5vw, 4.8rem);
+  font-weight: 740;
+  line-height: 0.95;
+  letter-spacing: 0;
+}
+
+.sectionHeader p,
+.productCopy p,
+.finalCta p {
+  margin: 18px 0 0;
+  color: var(--ll-muted);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.stepGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.stepCard,
+.previewPanel,
+.nameCard,
+.nameChosen {
+  border: 1px solid var(--ll-border);
+  border-radius: 8px;
+  background: var(--ll-surface);
+}
+
+.stepCard {
+  padding: 22px;
+}
+
+.stepIcon {
+  color: var(--ll-green);
+}
+
+.stepCard h3,
+.nameCard h3,
+.nameChosen h3 {
+  margin: 18px 0 0;
+  font-size: 20px;
+  line-height: 1.15;
+}
+
+.stepCard p,
+.nameCard p,
+.nameChosen p {
+  margin: 12px 0 0;
+  color: var(--ll-muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.productSection {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(420px, 1.1fr);
+  gap: 34px;
+  align-items: center;
+  padding: 56px 0;
+}
+
+.inlineLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 22px;
+  color: var(--ll-green);
+  font-weight: 760;
+}
+
+.previewPanel {
+  padding: 18px;
+  box-shadow: 0 8px 26px rgba(23, 33, 27, 0.08);
+}
+
+.previewTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--ll-border);
+  padding-bottom: 16px;
+}
+
+.previewTop strong,
+.previewTop span {
+  display: block;
+}
+
+.previewTop strong {
+  font-size: 18px;
+}
+
+.previewTop span {
+  margin-top: 4px;
+  color: var(--ll-muted);
+  font-size: 13px;
+}
+
+.previewStatus {
+  border: 1px solid rgba(31, 106, 67, 0.28);
+  border-radius: 8px;
+  background: var(--ll-green-soft);
+  padding: 8px 10px;
+  color: var(--ll-green);
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.previewRows {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.previewRow {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid color-mix(in oklab, var(--ll-border) 80%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--ll-bg) 58%, var(--ll-surface) 42%);
+  padding: 12px;
+  font-size: 13px;
+}
+
+.previewRow span {
+  color: var(--ll-clay);
+  font-weight: 740;
+}
+
+.previewRow strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.previewRow small {
+  color: var(--ll-muted);
+  font-size: 12px;
+}
+
+.commentDraft {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  border: 1px solid rgba(31, 106, 67, 0.22);
+  border-radius: 8px;
+  background: var(--ll-green-soft);
+  padding: 14px;
+}
+
+.commentDraft span {
+  color: var(--ll-green);
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.commentDraft p {
+  margin: 0;
+  color: var(--ll-ink);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.commentDraft button {
+  justify-self: start;
+  min-height: 38px;
+  border: 1px solid var(--ll-green);
+  border-radius: 8px;
+  background: var(--ll-green);
+  padding: 0 12px;
+  color: var(--ll-surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.nameGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.nameCard,
+.nameChosen {
+  padding: 18px;
+}
+
+.nameChosen {
+  border-color: rgba(31, 106, 67, 0.34);
+  background: var(--ll-green-soft);
+}
+
+.finalCta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-top: 1px solid var(--ll-border);
+  padding: 64px 0 76px;
+}
+
+.finalCta h2 {
+  max-width: 720px;
+  font-size: clamp(2rem, 4vw, 3.8rem);
+}
+
+.finalCta p {
+  max-width: 560px;
+}
+
+@media (max-width: 960px) {
+  .hero {
+    min-height: auto;
+    background:
+      linear-gradient(180deg, rgba(244, 241, 234, 0.96) 0%, rgba(244, 241, 234, 0.9) 54%, rgba(244, 241, 234, 0.24) 100%),
+      url("/liftline/hero-workspace.png");
+    background-position: 58% center;
+  }
+
+  .nav,
+  .heroInner {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .nav {
+    grid-template-columns: 1fr auto;
+  }
+
+  .navLinks {
+    display: none;
+  }
+
+  .heroInner {
+    min-height: 620px;
+    align-items: start;
+    padding-top: 56px;
+  }
+
+  .proofStrip,
+  .section,
+  .productSection,
+  .finalCta {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .proofStrip,
+  .stepGrid,
+  .productSection,
+  .nameGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .productSection,
+  .finalCta {
+    align-items: stretch;
+  }
+
+  .finalCta {
+    display: grid;
+  }
+}
+
+@media (max-width: 640px) {
+  .heroCopy h1 {
+    font-size: clamp(4.3rem, 24vw, 6.2rem);
+  }
+
+  .heroLead {
+    font-size: 1.08rem;
+  }
+
+  .heroActions,
+  .previewTop {
+    display: grid;
+  }
+
+  .primaryButton,
+  .secondaryButton,
+  .navCta {
+    width: 100%;
+  }
+
+  .previewRow {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .sectionHeader h2,
+  .productCopy h2,
+  .finalCta h2 {
+    font-size: clamp(2rem, 11vw, 3rem);
+  }
+}

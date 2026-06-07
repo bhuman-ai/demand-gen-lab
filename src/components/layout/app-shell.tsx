@@ -7,6 +7,7 @@ import {
   FolderKanban,
   FlaskConical,
   Inbox,
+  Instagram,
   Mail,
   MessageSquareText,
   Network,
@@ -41,10 +42,22 @@ type OperatorOpenRequest = {
 };
 
 type MainNavItem = NavItem & {
-  id: "agent" | "missions" | "campaigns" | "network" | "leads" | "inbox" | "social-discovery";
+  id:
+    | "agent"
+    | "missions"
+    | "campaigns"
+    | "network"
+    | "leads"
+    | "inbox"
+    | "instagram-growth"
+    | "social-discovery";
 };
 
-const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review"]);
+const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review", "/liftline"]);
+
+function isInstagramGrowthStandaloneRoute(pathname: string) {
+  return /^\/brands\/[^/]+\/instagram-growth(?:\/|$)/.test(pathname);
+}
 
 function prettySegment(value: string) {
   return value
@@ -95,7 +108,8 @@ function breadcrumb(pathname: string, activeBrandName?: string) {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const chromeless = CHROMELESS_ROUTES.has(pathname);
+  const instagramGrowthStandalone = isInstagramGrowthStandaloneRoute(pathname);
+  const chromeless = CHROMELESS_ROUTES.has(pathname) || instagramGrowthStandalone;
   const pathBrandId = getActiveBrandIdFromPath(pathname);
   const storedBrandId =
     typeof window !== "undefined" ? localStorage.getItem(ACTIVE_BRAND_KEY) || "" : "";
@@ -108,8 +122,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [operatorRequest, setOperatorRequest] = useState<OperatorOpenRequest | null>(null);
 
   useLayoutEffect(() => {
+    if (instagramGrowthStandalone) return;
     redirectToCanonicalLastB2bHost();
-  }, []);
+  }, [instagramGrowthStandalone]);
 
   useEffect(() => {
     if (chromeless) return;
@@ -257,6 +272,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       { id: "campaigns", label: "Campaigns", href: hasActiveBrand ? `${brandRoot}/campaigns` : "/brands", icon: FolderKanban },
       { id: "network", label: "Delivery", href: hasActiveBrand ? `${brandRoot}/network` : "/brands", icon: Network },
       {
+        id: "instagram-growth",
+        label: "Instagram Growth",
+        href: hasActiveBrand ? `${brandRoot}/instagram-growth` : "/brands",
+        icon: Instagram,
+      },
+      {
         id: "social-discovery",
         label: "Social",
         href: hasActiveBrand ? `${brandRoot}/social-discovery` : "/brands",
@@ -274,6 +295,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       if (pathname === `${brandRoot}/network` || pathname.startsWith(`${brandRoot}/network/`)) return "network";
       if (pathname === `${brandRoot}/leads` || pathname.startsWith(`${brandRoot}/leads/`)) return "leads";
       if (pathname === `${brandRoot}/inbox` || pathname.startsWith(`${brandRoot}/inbox/`)) return "inbox";
+      if (pathname === `${brandRoot}/instagram-growth` || pathname.startsWith(`${brandRoot}/instagram-growth/`)) return "instagram-growth";
       if (pathname === `${brandRoot}/social-discovery` || pathname.startsWith(`${brandRoot}/social-discovery/`)) return "social-discovery";
     }
     return "";

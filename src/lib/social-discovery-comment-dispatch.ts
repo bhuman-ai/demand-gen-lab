@@ -475,9 +475,19 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
     const brandPlatforms = normalizeDispatchPlatforms(
       platforms.filter((platform) => {
         if (platform === "youtube") return brand.socialDiscoveryYouTubeAutoCommentEnabled;
+        if (platform === "instagram") {
+          const liftlineInstagramEnabled = Boolean(
+            liftlineConfig?.enabled &&
+              (liftlineConfig.platforms.length ? liftlineConfig.platforms.includes("instagram") : true)
+          );
+          const configuredInstagramEnabled =
+            brand.socialDiscoveryPlatforms.includes("instagram") &&
+            Boolean(brand.socialDiscoveryCommentPrompt.trim() || brand.socialDiscoveryQueries.length);
+          return liftlineInstagramEnabled || configuredInstagramEnabled;
+        }
         return Boolean(
           liftlineConfig?.enabled &&
-            (liftlineConfig.platforms.length ? liftlineConfig.platforms.includes("instagram") : true)
+            (liftlineConfig.platforms.length ? liftlineConfig.platforms.includes(platform) : true)
         );
       }),
       []

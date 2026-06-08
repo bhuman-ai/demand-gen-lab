@@ -276,15 +276,17 @@ const OPTIONAL_BRAND_COLUMNS = [
   "operable_personas",
   "available_assets",
 ] as const;
-const LEGACY_BRAND_SELECT_COLUMNS = BRAND_SELECT_COLUMNS.filter(
-  (column) => !OPTIONAL_BRAND_COLUMNS.includes(column as (typeof OPTIONAL_BRAND_COLUMNS)[number])
-);
-const BRAND_BASE_SELECT = [
-  ...BRAND_SELECT_COLUMNS,
-].join(",");
-const LEGACY_BRAND_BASE_SELECT = [...LEGACY_BRAND_SELECT_COLUMNS].join(",");
-const BRAND_EMBEDDED_SELECT = `${BRAND_BASE_SELECT},leads,inbox`;
-const LEGACY_BRAND_EMBEDDED_SELECT = `${LEGACY_BRAND_BASE_SELECT},leads,inbox`;
+const OPTIONAL_BRAND_COLUMN_FIELDS: Record<(typeof OPTIONAL_BRAND_COLUMNS)[number], string> = {
+  social_discovery_comment_prompt: "social_discovery_comment_prompt",
+  social_discovery_platforms: "social_discovery_platforms",
+  social_discovery_queries: "social_discovery_queries",
+  social_discovery_youtube_subscriptions: "social_discovery_youtube_subscriptions",
+  social_discovery_youtube_auto_comment_enabled: "social_discovery_youtube_auto_comment_enabled",
+  social_discovery_search_strategy: "social_discovery_search_strategy",
+  liftline_autopilot_config: "liftline_autopilot_config",
+  operable_personas: "operable_personas",
+  available_assets: "available_assets",
+};
 
 const nowIso = () => new Date().toISOString();
 
@@ -571,6 +573,23 @@ function isMissingSupabaseColumn(error: unknown, column: string) {
   );
 }
 
+function missingSupabaseColumns(error: unknown) {
+  return OPTIONAL_BRAND_COLUMNS.filter((column) => isMissingSupabaseColumn(error, column));
+}
+
+function brandSelectColumns(options?: { includeEmbedded?: boolean; excludeColumns?: readonly string[] }) {
+  const excludeColumns = new Set(options?.excludeColumns ?? []);
+  const columns = BRAND_SELECT_COLUMNS.filter((column) => !excludeColumns.has(column));
+  const select = columns.join(",");
+  return options?.includeEmbedded ? `${select},leads,inbox` : select;
+}
+
+function removeSupabaseColumns(payload: Record<string, unknown>, columns: readonly string[]) {
+  for (const column of columns) {
+    delete payload[OPTIONAL_BRAND_COLUMN_FIELDS[column as (typeof OPTIONAL_BRAND_COLUMNS)[number]] ?? column];
+  }
+}
+
 const mapBrandRow = (input: unknown): BrandRecord => {
   const row = asRecord(input);
   const notesRaw = String(row.notes ?? "");
@@ -741,8 +760,7 @@ export async function listBrands(): Promise<BrandRecord[]> {
 export async function listBrandsWithOptions(options?: {
   includeEmbedded?: boolean;
 }): Promise<BrandRecord[]> {
-  const selectColumns = options?.includeEmbedded ? BRAND_EMBEDDED_SELECT : BRAND_BASE_SELECT;
-  const legacySelectColumns = options?.includeEmbedded ? LEGACY_BRAND_EMBEDDED_SELECT : LEGACY_BRAND_BASE_SELECT;
+  const selectColumns = brandSelectColumns({ includeEmbedded: options?.includeEmbedded });
   const local = await readBrandRowsFromStore();
   const supabase = getSupabaseAdmin();
   if (supabase) {
@@ -754,11 +772,12 @@ export async function listBrandsWithOptions(options?: {
       SUPABASE_QUERY_TIMEOUT_MS
     )) as { data: unknown[] | null; error: unknown | null } | null;
     const responseError = response?.error;
-    if (responseError && OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(responseError, column))) {
+    const missingColumns = missingSupabaseColumns(responseError);
+    if (missingColumns.length) {
       response = (await withTimeout(
         supabase
           .from(BRAND_TABLE)
-          .select(legacySelectColumns)
+          .select(brandSelectColumns({ includeEmbedded: options?.includeEmbedded, excludeColumns: missingColumns }))
           .order("updated_at", { ascending: false }),
         SUPABASE_QUERY_TIMEOUT_MS
       )) as { data: unknown[] | null; error: unknown | null } | null;
@@ -779,8 +798,7 @@ export async function getBrandById(
     includeEmbedded?: boolean;
   }
 ): Promise<BrandRecord | null> {
-  const selectColumns = options?.includeEmbedded ? BRAND_EMBEDDED_SELECT : BRAND_BASE_SELECT;
-  const legacySelectColumns = options?.includeEmbedded ? LEGACY_BRAND_EMBEDDED_SELECT : LEGACY_BRAND_BASE_SELECT;
+  const selectColumns = brandSelectColumns({ includeEmbedded: options?.includeEmbedded });
   const local = await readBrandRowsFromStore();
   const supabase = getSupabaseAdmin();
   if (supabase) {
@@ -793,11 +811,12 @@ export async function getBrandById(
       SUPABASE_QUERY_TIMEOUT_MS
     )) as { data: unknown | null; error: unknown | null } | null;
     const responseError = response?.error;
-    if (responseError && OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(responseError, column))) {
+    const missingColumns = missingSupabaseColumns(responseError);
+    if (missingColumns.length) {
       response = (await withTimeout(
         supabase
           .from(BRAND_TABLE)
-          .select(legacySelectColumns)
+          .select(brandSelectColumns({ includeEmbedded: options?.includeEmbedded, excludeColumns: missingColumns }))
           .eq("id", brandId)
           .maybeSingle(),
         SUPABASE_QUERY_TIMEOUT_MS
@@ -895,21 +914,14 @@ export async function createBrand(input: {
       .insert(insertPayload)
       .select("*")
       .single();
-    if (OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(error, column))) {
+    const missingColumns = missingSupabaseColumns(error);
+    if (missingColumns.length) {
       const legacyInsertPayload: Record<string, unknown> = { ...insertPayload };
-      delete legacyInsertPayload.social_discovery_comment_prompt;
-      delete legacyInsertPayload.social_discovery_platforms;
-      delete legacyInsertPayload.social_discovery_queries;
-      delete legacyInsertPayload.social_discovery_youtube_subscriptions;
-      delete legacyInsertPayload.social_discovery_youtube_auto_comment_enabled;
-      delete legacyInsertPayload.social_discovery_search_strategy;
-      delete legacyInsertPayload.liftline_autopilot_config;
-      delete legacyInsertPayload.operable_personas;
-      delete legacyInsertPayload.available_assets;
+      removeSupabaseColumns(legacyInsertPayload, missingColumns);
       const retried = await supabase
         .from(BRAND_TABLE)
         .insert(legacyInsertPayload)
-        .select(LEGACY_BRAND_EMBEDDED_SELECT)
+        .select(brandSelectColumns({ includeEmbedded: true, excludeColumns: missingColumns }))
         .single();
       data = retried.data;
       error = retried.error;
@@ -1031,21 +1043,14 @@ export async function updateBrand(
       .eq("id", brandId)
       .select("*")
       .maybeSingle();
-    if (OPTIONAL_BRAND_COLUMNS.some((column) => isMissingSupabaseColumn(error, column))) {
-      delete update.social_discovery_comment_prompt;
-      delete update.social_discovery_platforms;
-      delete update.social_discovery_queries;
-      delete update.social_discovery_youtube_subscriptions;
-      delete update.social_discovery_youtube_auto_comment_enabled;
-      delete update.social_discovery_search_strategy;
-      delete update.liftline_autopilot_config;
-      delete update.operable_personas;
-      delete update.available_assets;
+    const missingColumns = missingSupabaseColumns(error);
+    if (missingColumns.length) {
+      removeSupabaseColumns(update, missingColumns);
       const retried = await supabase
         .from(BRAND_TABLE)
         .update(update)
         .eq("id", brandId)
-        .select(LEGACY_BRAND_EMBEDDED_SELECT)
+        .select(brandSelectColumns({ includeEmbedded: true, excludeColumns: missingColumns }))
         .maybeSingle();
       data = retried.data;
       error = retried.error;

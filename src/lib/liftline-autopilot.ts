@@ -301,6 +301,13 @@ export async function acceptLiftlineAutopilotSetup(payload: unknown) {
     1,
     240
   );
+  const readiness = await accountReadiness(platforms);
+  const requireConnectedAccounts = boolEnv("LIFTLINE_AUTOPILOT_REQUIRE_CONNECTED_ACCOUNTS", true);
+  const blockedPlatforms = [
+    platforms.includes("instagram") && !readiness.instagramReady ? "Instagram" : "",
+    platforms.includes("youtube") && !readiness.youtubeReady ? "YouTube" : "",
+  ].filter(Boolean);
+  const setupAccepted = !requireConnectedAccounts || !blockedPlatforms.length;
   const updatedBrand = await updateBrand(brand.id, {
     socialDiscoveryPlatforms: uniqueStrings([...brand.socialDiscoveryPlatforms, ...platforms]),
     socialDiscoveryQueries: targets,
@@ -314,10 +321,10 @@ export async function acceptLiftlineAutopilotSetup(payload: unknown) {
       plan: configuredPlan,
     }),
     socialDiscoveryYouTubeAutoCommentEnabled: platforms.includes("youtube")
-      ? true
+      ? setupAccepted
       : brand.socialDiscoveryYouTubeAutoCommentEnabled,
     liftlineAutopilotConfig: {
-      enabled: true,
+      enabled: setupAccepted,
       setupId,
       source: "liftline",
       planId: configuredPlan.id,
@@ -340,7 +347,6 @@ export async function acceptLiftlineAutopilotSetup(payload: unknown) {
     });
   }
 
-  const readiness = await accountReadiness(platforms);
   const events = proof({
     brand: updatedBrand,
     platforms,
@@ -348,11 +354,6 @@ export async function acceptLiftlineAutopilotSetup(payload: unknown) {
     plan: configuredPlan,
     readiness,
   });
-  const requireConnectedAccounts = boolEnv("LIFTLINE_AUTOPILOT_REQUIRE_CONNECTED_ACCOUNTS", true);
-  const blockedPlatforms = [
-    platforms.includes("instagram") && !readiness.instagramReady ? "Instagram" : "",
-    platforms.includes("youtube") && !readiness.youtubeReady ? "YouTube" : "",
-  ].filter(Boolean);
   if (requireConnectedAccounts && blockedPlatforms.length) {
     throw new LiftlineAutopilotError(`${blockedPlatforms.join(" and ")} needs reconnection before autopilot can start.`, {
       status: 409,

@@ -10,6 +10,7 @@ import {
 type YouTubeConnectState = {
   accountId: string;
   brandId: string;
+  returnTo: string;
   issuedAt: number;
 };
 
@@ -17,6 +18,7 @@ type PrepareYouTubeConnectInput = {
   accountId: string;
   brandId?: string;
   loginHint?: string;
+  returnTo?: string;
 };
 
 export class YouTubeConnectError extends Error {
@@ -62,6 +64,51 @@ function callbackUrl() {
   return `${getAppUrl()}/api/outreach/accounts/youtube/callback`;
 }
 
+function configuredReturnOrigins() {
+  return String(process.env.YOUTUBE_OAUTH_ALLOWED_RETURN_ORIGINS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function defaultReturnOrigins() {
+  return [
+    "https://www.tapinsocial.com",
+    "https://tapinsocial.com",
+    getAppUrl(),
+  ];
+}
+
+export function normalizeYouTubeConnectReturnTo(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+    const isLocal =
+      url.protocol === "http:" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1");
+    if (url.protocol !== "https:" && !isLocal) return "";
+
+    const allowedOrigins = new Set(
+      [...defaultReturnOrigins(), ...configuredReturnOrigins()]
+        .map((entry) => {
+          try {
+            return new URL(entry).origin;
+          } catch {
+            return "";
+          }
+        })
+        .filter(Boolean)
+    );
+
+    if (!allowedOrigins.has(url.origin) && !isLocal) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput) {
   const accountId = String(input.accountId ?? "").trim();
   const brandId = String(input.brandId ?? "").trim();
@@ -101,6 +148,7 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
   const state = encodeState({
     accountId,
     brandId,
+    returnTo: normalizeYouTubeConnectReturnTo(input.returnTo),
     issuedAt: Date.now(),
   });
 

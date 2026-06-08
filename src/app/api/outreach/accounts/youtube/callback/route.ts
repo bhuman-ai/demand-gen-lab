@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { getOutreachAccount, getOutreachAccountSecrets, updateOutreachAccount } from "@/lib/outreach-data";
 import { getAppUrl } from "@/lib/app-url";
+import { normalizeYouTubeConnectReturnTo } from "@/lib/youtube-connect";
 import {
   exchangeYouTubeOAuthCode,
   getAuthenticatedYouTubeChannelProfile,
@@ -12,6 +13,7 @@ import {
 type YouTubeConnectState = {
   accountId: string;
   brandId: string;
+  returnTo: string;
   issuedAt: number;
 };
 
@@ -62,6 +64,7 @@ function decodeState(value: string): YouTubeConnectState | null {
     return {
       accountId,
       brandId,
+      returnTo: normalizeYouTubeConnectReturnTo(row.returnTo),
       issuedAt,
     };
   } catch {
@@ -72,13 +75,15 @@ function decodeState(value: string): YouTubeConnectState | null {
 function redirectUrl(input: {
   brandId: string;
   accountId: string;
+  returnTo?: string;
   result: "success" | "failure";
   message?: string;
 }) {
-  const base = input.brandId
+  const returnTo = normalizeYouTubeConnectReturnTo(input.returnTo);
+  const fallback = input.brandId
     ? `${getAppUrl()}/brands/${encodeURIComponent(input.brandId)}/social-discovery`
     : `${getAppUrl()}/settings/outreach`;
-  const url = new URL(base);
+  const url = new URL(returnTo || fallback);
   url.searchParams.set("linkedAccount", input.accountId);
   url.searchParams.set("youtube", input.result);
   if (String(input.message ?? "").trim()) {
@@ -119,6 +124,7 @@ export async function GET(request: Request) {
       redirectUrl({
         brandId: state.brandId,
         accountId: state.accountId,
+        returnTo: state.returnTo,
         result: "failure",
         message,
       })
@@ -252,6 +258,7 @@ export async function GET(request: Request) {
       redirectUrl({
         brandId: state.brandId,
         accountId: state.accountId,
+        returnTo: state.returnTo,
         result: "success",
       })
     );

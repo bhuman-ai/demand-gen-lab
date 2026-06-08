@@ -19,6 +19,7 @@ export async function POST(
       accountId,
       brandId: String(body.brandId ?? body.brand_id ?? "").trim(),
       loginHint: String(body.loginHint ?? body.login_hint ?? "").trim(),
+      returnTo: String(body.returnTo ?? body.return_to ?? "").trim(),
     });
 
     return NextResponse.json({ url });

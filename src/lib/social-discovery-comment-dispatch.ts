@@ -21,14 +21,16 @@ import {
   splitSocialDiscoveryCsv,
 } from "@/lib/social-discovery-search-strategy";
 import type { OutreachAccount } from "@/lib/factory-types";
-import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
+import type { SocialDiscoveryPlatform, SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
 
 type AutoCommentDispatchOptions = {
   brandIds?: string[];
   scanAllBrands?: boolean;
   dryRun?: boolean;
+  platforms?: SocialDiscoveryPlatform[];
   limit?: number;
+  dailyCap?: number;
   hourlyCap?: number;
   perRunCap?: number;
   perAccountHourlyCap?: number;
@@ -74,6 +76,21 @@ function numberOption(value: unknown, fallback: number, min: number, max: number
   return Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : fallback));
 }
 
+function splitCsv(value: unknown) {
+  const raw = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return raw
+    .map((entry) => String(entry ?? "").trim())
+    .filter(Boolean);
+}
+
+function normalizeDispatchPlatforms(value: unknown, fallback: SocialDiscoveryPlatform[] = ["youtube"]) {
+  const platforms = splitCsv(value)
+    .map((platform) => platform.toLowerCase())
+    .filter((platform): platform is SocialDiscoveryPlatform => platform === "instagram" || platform === "youtube");
+  const unique = Array.from(new Set(platforms));
+  return unique.length ? unique : fallback;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -92,6 +109,17 @@ function youtubeSubscriberCount(post: SocialDiscoveryPost) {
 
 function youtubeChannelId(post: SocialDiscoveryPost) {
   return String(youtubeRecord(post).channelId ?? "").trim();
+}
+
+function postSourceKey(post: SocialDiscoveryPost) {
+  if (post.platform === "youtube") return youtubeChannelId(post);
+  return String(
+    asRecord(asRecord(post.raw).liveContent).ownerUsername ??
+      asRecord(asRecord(post.raw).unipile).ownerUsername ??
+      post.author ??
+      post.community ??
+      ""
+  ).trim();
 }
 
 function videoTranscriptText(post: SocialDiscoveryPost) {
@@ -241,6 +269,16 @@ function isYouTubeAccount(account: OutreachAccount) {
   );
 }
 
+function isInstagramAccount(account: OutreachAccount) {
+  return (
+    account.status === "active" &&
+    account.config.social.enabled &&
+    account.config.social.connectionProvider === "unipile" &&
+    Boolean(account.config.social.externalAccountId.trim()) &&
+    (account.config.social.linkedProvider === "instagram" || account.config.social.platforms.includes("instagram"))
+  );
+}
+
 async function filterConnectedYouTubeAccounts(accounts: OutreachAccount[]) {
   const checked = await Promise.all(
     accounts.map(async (account) => {
@@ -253,10 +291,10 @@ async function filterConnectedYouTubeAccounts(accounts: OutreachAccount[]) {
   return checked.filter((account): account is OutreachAccount => Boolean(account));
 }
 
-function recommendedAccountIds(post: SocialDiscoveryPost) {
+function recommendedAccountIds(post: SocialDiscoveryPost, connectionProvider: "unipile" | "youtube") {
   return (
     post.interactionPlan.recommendedAccounts
-      ?.filter((entry) => entry.connectionProvider === "youtube" && entry.useCase === "primary_comment")
+      ?.filter((entry) => entry.connectionProvider === connectionProvider && entry.useCase === "primary_comment")
       .map((entry) => entry.accountId)
       .filter(Boolean) ?? []
   );
@@ -280,10 +318,11 @@ function accountCommentCounts(posts: SocialDiscoveryPost[]) {
 function chooseAccounts(input: {
   post: SocialDiscoveryPost;
   accounts: OutreachAccount[];
+  connectionProvider: "unipile" | "youtube";
   recentAccountCounts: Map<string, number>;
   perAccountHourlyCap: number;
 }) {
-  const recommended = recommendedAccountIds(input.post);
+  const recommended = recommendedAccountIds(input.post, input.connectionProvider);
   const byId = new Map(input.accounts.map((account) => [account.id, account]));
   const ordered = [
     ...recommended.map((id) => byId.get(id)).filter((account): account is OutreachAccount => Boolean(account)),
@@ -297,13 +336,13 @@ function chooseAccounts(input: {
   return { primary, reply };
 }
 
-function recentChannelIds(posts: SocialDiscoveryPost[], sinceMs: number) {
+function recentSourceKeys(posts: SocialDiscoveryPost[], sinceMs: number) {
   const ids = new Set<string>();
   for (const post of posts) {
     const postedMs = Date.parse(post.commentDelivery?.postedAt ?? "");
     if (!Number.isFinite(postedMs) || postedMs < sinceMs) continue;
-    const channelId = youtubeChannelId(post);
-    if (channelId) ids.add(channelId);
+    const sourceKey = postSourceKey(post);
+    if (sourceKey) ids.add(sourceKey);
   }
   return ids;
 }
@@ -335,6 +374,16 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
 ): Promise<AutoCommentDispatchResult> {
   const enabled = boolEnv("SOCIAL_DISCOVERY_AUTO_COMMENT_ENABLED", false);
   const dryRun = Boolean(options.dryRun ?? boolEnv("SOCIAL_DISCOVERY_AUTO_COMMENT_DRY_RUN", false));
+  const platforms = normalizeDispatchPlatforms(
+    options.platforms?.length ? options.platforms : process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_PLATFORMS,
+    ["youtube"]
+  );
+  const configuredDailyCap = numberOption(
+    options.dailyCap ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_DAILY_CAP,
+    30,
+    1,
+    500
+  );
   const hourlyCap = numberOption(options.hourlyCap ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_HOURLY_CAP, 10, 1, 100);
   const perRunCap = numberOption(
     options.perRunCap ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_PER_RUN_CAP,
@@ -402,6 +451,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
   if (!enabled && !dryRun) return result;
 
   const configuredYouTubeAccounts = (await listSocialRoutingAccounts()).filter(isYouTubeAccount);
+  const configuredInstagramAccounts = (await listSocialRoutingAccounts()).filter(isInstagramAccount);
   let connectedYouTubeAccounts: OutreachAccount[] | null = null;
   const usableYouTubeAccounts = async () => {
     if (!connectedYouTubeAccounts) {
@@ -421,35 +471,71 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
     };
     result.results.push(brandResult);
 
-    if (!brand.socialDiscoveryYouTubeAutoCommentEnabled) {
+    const liftlineConfig = brand.liftlineAutopilotConfig;
+    const brandPlatforms = normalizeDispatchPlatforms(
+      platforms.filter((platform) => {
+        if (platform === "youtube") return brand.socialDiscoveryYouTubeAutoCommentEnabled;
+        return Boolean(
+          liftlineConfig?.enabled &&
+            (liftlineConfig.platforms.length ? liftlineConfig.platforms.includes("instagram") : true)
+        );
+      }),
+      []
+    );
+
+    if (!brandPlatforms.length) {
       brandResult.skipped += 1;
       result.skipped += 1;
-      brandResult.details.push({ skipped: true, reason: "brand_youtube_auto_comment_disabled" });
+      brandResult.details.push({ skipped: true, reason: "brand_auto_comment_disabled" });
       continue;
     }
 
+    const sinceOneDay = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const recentDay = await listSocialDiscoveryCommentedPostsSince({
+      brandId: brand.id,
+      since: sinceOneDay,
+      limit: 1000,
+    });
+    const dailyCap = liftlineConfig?.dailyCommentLimit ?? configuredDailyCap;
+    let remainingForDay = Math.max(0, dailyCap - recentDay.length);
+    if (remainingForDay <= 0) {
+      brandResult.skipped += 1;
+      result.skipped += 1;
+      brandResult.details.push({ skipped: true, reason: "daily_cap_reached", dailyCap });
+      continue;
+    }
+
+    for (const platform of brandPlatforms) {
+      if (result.posted >= perRunCap || remainingForDay <= 0) break;
+      const connectionProvider = platform === "youtube" ? "youtube" : "unipile";
     const sinceOneHour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const recent = await listSocialDiscoveryCommentedPostsSince({
       brandId: brand.id,
-      platform: "youtube",
+      platform,
       since: sinceOneHour,
       limit: 1000,
     });
     const spacingSinceMs = Date.now() - minSpacingMinutes * 60 * 1000;
-    const channelSinceMs = Date.now() - channelCooldownMinutes * 60 * 1000;
+    const sourceSinceMs = Date.now() - channelCooldownMinutes * 60 * 1000;
     const recentPosted = recent.length;
     const latestPostMs = Math.max(
       0,
       ...recent.map((post) => Date.parse(post.commentDelivery?.postedAt ?? "")).filter(Number.isFinite)
     );
     const recentAccountCounts = accountCommentCounts(recent);
-    const blockedChannels = recentChannelIds(recent, channelSinceMs);
-    let remainingForBrand = Math.max(0, hourlyCap - recentPosted);
+    const blockedSources = recentSourceKeys(recent, sourceSinceMs);
+    let remainingForBrand = Math.min(remainingForDay, Math.max(0, hourlyCap - recentPosted));
 
-    if (!configuredYouTubeAccounts.length) {
+    if (platform === "youtube" && !configuredYouTubeAccounts.length) {
       brandResult.skipped += 1;
       result.skipped += 1;
       brandResult.details.push({ skipped: true, reason: "no_youtube_accounts" });
+      continue;
+    }
+    if (platform === "instagram" && !configuredInstagramAccounts.length) {
+      brandResult.skipped += 1;
+      result.skipped += 1;
+      brandResult.details.push({ skipped: true, reason: "no_instagram_accounts" });
       continue;
     }
     if (remainingForBrand <= 0) {
@@ -467,6 +553,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
 
     const candidates = await listSocialDiscoveryAutoCommentCandidates({
       brandId: brand.id,
+      platform,
       limit: candidateLimit,
       maxVideoAgeHours,
     });
@@ -476,17 +563,17 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
       brandResult.details.push({
         skipped: true,
         reason: "no_candidates",
-        platform: "youtube",
+        platform,
         maxVideoAgeHours,
         candidateLimit,
       });
       continue;
     }
-    const accounts = await usableYouTubeAccounts();
+    const accounts = platform === "youtube" ? await usableYouTubeAccounts() : configuredInstagramAccounts;
     if (!accounts.length) {
       brandResult.skipped += 1;
       result.skipped += 1;
-      brandResult.details.push({ skipped: true, reason: "no_connected_youtube_accounts" });
+      brandResult.details.push({ skipped: true, reason: `no_connected_${platform}_accounts` });
       continue;
     }
     for (const candidate of candidates) {
@@ -498,7 +585,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         brandResult.details.push({ postId: candidate.id, skipped: true, reason: retryReason });
         continue;
       }
-      if (youtubeSubscriberCount(candidate) <= MIN_YOUTUBE_AUTO_COMMENT_SUBSCRIBERS) {
+      if (platform === "youtube" && youtubeSubscriberCount(candidate) <= MIN_YOUTUBE_AUTO_COMMENT_SUBSCRIBERS) {
         await markDispatchAttempt({ post: candidate, status: "skipped", reason: "subscriber_gate" });
         brandResult.skipped += 1;
         result.skipped += 1;
@@ -523,17 +610,18 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         brandResult.details.push({ postId: candidate.id, skipped: true, reason: qualityProblem });
         continue;
       }
-      const channelId = youtubeChannelId(candidate);
-      if (channelId && blockedChannels.has(channelId)) {
+      const sourceKey = postSourceKey(candidate);
+      if (sourceKey && blockedSources.has(sourceKey)) {
         brandResult.skipped += 1;
         result.skipped += 1;
-        brandResult.details.push({ postId: candidate.id, skipped: true, reason: "channel_cooldown" });
+        brandResult.details.push({ postId: candidate.id, skipped: true, reason: "source_cooldown" });
         continue;
       }
 
       const { primary, reply } = chooseAccounts({
         post: candidate,
         accounts,
+        connectionProvider,
         recentAccountCounts,
         perAccountHourlyCap,
       });
@@ -545,7 +633,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
       }
 
       try {
-        const transcriptPost = await withTranscript(candidate);
+        const transcriptPost = platform === "youtube" ? await withTranscript(candidate) : candidate;
         const mode = reply ? "thread" : "solo";
         const drafted = await refreshSocialDiscoveryCommentDraft({
           brand,
@@ -613,8 +701,9 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         });
         recentAccountCounts.set(primary.id, (recentAccountCounts.get(primary.id) ?? 0) + 1);
         if (reply) recentAccountCounts.set(reply.id, (recentAccountCounts.get(reply.id) ?? 0) + 1);
-        if (channelId) blockedChannels.add(channelId);
+        if (sourceKey) blockedSources.add(sourceKey);
         remainingForBrand -= 1;
+        remainingForDay -= 1;
         result.posted += 1;
         brandResult.posted += 1;
         brandResult.details.push({
@@ -641,6 +730,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         result.failed += 1;
         brandResult.details.push({ postId: candidate.id, failed: true, reason: message });
       }
+    }
     }
   }
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { isInternalCronAuthorized, recordInternalCronRun, runCronTask } from "@/lib/internal-cron";
 import { runSocialDiscoveryAutoCommentDispatchTick } from "@/lib/social-discovery-comment-dispatch";
+import type { SocialDiscoveryPlatform } from "@/lib/social-discovery-types";
 
 export const maxDuration = 60;
 
@@ -16,6 +17,12 @@ function splitCsv(value: unknown) {
   return raw
     .map((entry) => String(entry ?? "").trim())
     .filter(Boolean);
+}
+
+function platformOptions(value: unknown): SocialDiscoveryPlatform[] {
+  return splitCsv(value)
+    .map((entry) => entry.toLowerCase())
+    .filter((entry): entry is SocialDiscoveryPlatform => entry === "instagram" || entry === "youtube");
 }
 
 function numberOption(value: unknown) {
@@ -59,7 +66,11 @@ async function handleDispatch(request: Request) {
         brandIds,
         scanAllBrands,
         dryRun,
+        platforms: platformOptions(
+          body.platforms ?? body.platform ?? url.searchParams.get("platforms") ?? url.searchParams.get("platform")
+        ),
         limit: numberOption(body.brandLimit ?? url.searchParams.get("brandLimit")),
+        dailyCap: numberOption(body.dailyCap ?? url.searchParams.get("dailyCap")),
         hourlyCap: numberOption(body.hourlyCap ?? url.searchParams.get("hourlyCap")),
         perRunCap: numberOption(body.perRunCap ?? url.searchParams.get("perRunCap")),
         perAccountHourlyCap: numberOption(body.perAccountHourlyCap ?? url.searchParams.get("perAccountHourlyCap")),

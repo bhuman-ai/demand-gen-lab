@@ -55,6 +55,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryYouTubeSubscriptions: [],
     socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
+    liftlineAutopilotConfig: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [],
@@ -81,6 +82,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryYouTubeSubscriptions: [],
     socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
+    liftlineAutopilotConfig: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: ["Bootstrapped SaaS founders", "Self-funded operators"],
@@ -114,6 +116,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryYouTubeSubscriptions: [],
     socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
+    liftlineAutopilotConfig: null,
     operablePersonas: [
       "Journalist covering creator workflows and AI video",
       "Research lead interviewing creators about personalized video use",
@@ -176,6 +179,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryYouTubeSubscriptions: [],
     socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
+    liftlineAutopilotConfig: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [],
@@ -203,6 +207,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     socialDiscoveryYouTubeSubscriptions: [],
     socialDiscoveryYouTubeAutoCommentEnabled: false,
     socialDiscoverySearchStrategy: null,
+    liftlineAutopilotConfig: null,
     operablePersonas: [],
     availableAssets: [],
     targetMarkets: [
@@ -249,6 +254,7 @@ const BRAND_SELECT_COLUMNS = [
   "social_discovery_youtube_subscriptions",
   "social_discovery_youtube_auto_comment_enabled",
   "social_discovery_search_strategy",
+  "liftline_autopilot_config",
   "operable_personas",
   "available_assets",
   "target_markets",
@@ -266,6 +272,7 @@ const OPTIONAL_BRAND_COLUMNS = [
   "social_discovery_youtube_subscriptions",
   "social_discovery_youtube_auto_comment_enabled",
   "social_discovery_search_strategy",
+  "liftline_autopilot_config",
   "operable_personas",
   "available_assets",
 ] as const;
@@ -442,6 +449,51 @@ function normalizeSocialDiscoverySearchStrategy(value: unknown): BrandRecord["so
   };
 }
 
+function normalizeLiftlineAutopilotConfig(value: unknown): BrandRecord["liftlineAutopilotConfig"] {
+  const row = asRecord(value);
+  const enabled = normalizeBoolean(row.enabled, false);
+  const setupId = String(row.setupId ?? row.setup_id ?? "").trim();
+  const planIdRaw = String(row.planId ?? row.plan_id ?? "").trim().toLowerCase();
+  const planId =
+    planIdRaw === "starter" || planIdRaw === "scale" || planIdRaw === "growth"
+      ? planIdRaw
+      : "growth";
+  const platforms = normalizeStringArray(row.platforms).filter((platform) =>
+    ["instagram", "youtube"].includes(platform.toLowerCase())
+  );
+  const targets = normalizeStringArray(row.targets).slice(0, 24);
+  const dailyCommentLimit = Math.max(
+    1,
+    Math.min(500, Math.round(normalizeNumber(row.dailyCommentLimit ?? row.daily_comment_limit, 30)))
+  );
+  const accountLimit = Math.max(
+    1,
+    Math.min(100, Math.round(normalizeNumber(row.accountLimit ?? row.account_limit, 3)))
+  );
+  const lastSetupAt = String(row.lastSetupAt ?? row.last_setup_at ?? "").trim();
+  if (!enabled && !setupId && !platforms.length && !targets.length && !lastSetupAt) return null;
+
+  return {
+    enabled,
+    setupId,
+    source: "liftline",
+    planId,
+    dailyCommentLimit,
+    accountLimit,
+    platforms,
+    targets,
+    voice: String(row.voice ?? "").trim(),
+    voiceSample: String(row.voiceSample ?? row.voice_sample ?? "").trim(),
+    timingWindowMinutes: Math.max(
+      1,
+      Math.min(240, Math.round(normalizeNumber(row.timingWindowMinutes ?? row.timing_window_minutes, 10)))
+    ),
+    boostMode: "automatic",
+    carefulMode: normalizeBoolean(row.carefulMode ?? row.careful_mode, true),
+    lastSetupAt,
+  };
+}
+
 const SOCIAL_DISCOVERY_COMMENT_PROMPT_NOTE_MARKER = "LASTB2B_SOCIAL_DISCOVERY_COMMENT_PROMPT:";
 const SOCIAL_DISCOVERY_QUERIES_NOTE_MARKER = "LASTB2B_SOCIAL_DISCOVERY_QUERIES:";
 
@@ -549,6 +601,9 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     ),
     socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(
       row.social_discovery_search_strategy ?? row.socialDiscoverySearchStrategy
+    ),
+    liftlineAutopilotConfig: normalizeLiftlineAutopilotConfig(
+      row.liftline_autopilot_config ?? row.liftlineAutopilotConfig
     ),
     operablePersonas: normalizeStringArray(
       row.operable_personas ?? row.operablePersonas ?? row.real_personas ?? row.realPersonas
@@ -767,6 +822,7 @@ export async function createBrand(input: {
   socialDiscoveryYouTubeSubscriptions?: BrandRecord["socialDiscoveryYouTubeSubscriptions"];
   socialDiscoveryYouTubeAutoCommentEnabled?: boolean;
   socialDiscoverySearchStrategy?: BrandRecord["socialDiscoverySearchStrategy"];
+  liftlineAutopilotConfig?: BrandRecord["liftlineAutopilotConfig"];
   operablePersonas?: string[];
   availableAssets?: string[];
   targetMarkets?: string[];
@@ -790,6 +846,7 @@ export async function createBrand(input: {
     ),
     socialDiscoveryYouTubeAutoCommentEnabled: Boolean(input.socialDiscoveryYouTubeAutoCommentEnabled),
     socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(input.socialDiscoverySearchStrategy),
+    liftlineAutopilotConfig: normalizeLiftlineAutopilotConfig(input.liftlineAutopilotConfig),
     operablePersonas: normalizeStringArray(input.operablePersonas),
     availableAssets: normalizeStringArray(input.availableAssets),
     targetMarkets: normalizeStringArray(input.targetMarkets),
@@ -822,6 +879,7 @@ export async function createBrand(input: {
       social_discovery_youtube_subscriptions: brand.socialDiscoveryYouTubeSubscriptions,
       social_discovery_youtube_auto_comment_enabled: brand.socialDiscoveryYouTubeAutoCommentEnabled,
       social_discovery_search_strategy: brand.socialDiscoverySearchStrategy ?? {},
+      liftline_autopilot_config: brand.liftlineAutopilotConfig ?? {},
       operable_personas: brand.operablePersonas,
       available_assets: brand.availableAssets,
       target_markets: brand.targetMarkets,
@@ -845,6 +903,7 @@ export async function createBrand(input: {
       delete legacyInsertPayload.social_discovery_youtube_subscriptions;
       delete legacyInsertPayload.social_discovery_youtube_auto_comment_enabled;
       delete legacyInsertPayload.social_discovery_search_strategy;
+      delete legacyInsertPayload.liftline_autopilot_config;
       delete legacyInsertPayload.operable_personas;
       delete legacyInsertPayload.available_assets;
       const retried = await supabase
@@ -886,6 +945,7 @@ export async function updateBrand(
       | "socialDiscoveryYouTubeSubscriptions"
       | "socialDiscoveryYouTubeAutoCommentEnabled"
       | "socialDiscoverySearchStrategy"
+      | "liftlineAutopilotConfig"
       | "operablePersonas"
       | "availableAssets"
       | "targetMarkets"
@@ -950,6 +1010,9 @@ export async function updateBrand(
     if (patch.socialDiscoverySearchStrategy !== undefined) {
       update.social_discovery_search_strategy = normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy) ?? {};
     }
+    if (patch.liftlineAutopilotConfig !== undefined) {
+      update.liftline_autopilot_config = normalizeLiftlineAutopilotConfig(patch.liftlineAutopilotConfig) ?? {};
+    }
     if (Array.isArray(patch.operablePersonas)) update.operable_personas = patch.operablePersonas;
     if (Array.isArray(patch.availableAssets)) update.available_assets = patch.availableAssets;
     if (Array.isArray(patch.targetMarkets)) update.target_markets = patch.targetMarkets;
@@ -975,6 +1038,7 @@ export async function updateBrand(
       delete update.social_discovery_youtube_subscriptions;
       delete update.social_discovery_youtube_auto_comment_enabled;
       delete update.social_discovery_search_strategy;
+      delete update.liftline_autopilot_config;
       delete update.operable_personas;
       delete update.available_assets;
       const retried = await supabase
@@ -1011,6 +1075,10 @@ export async function updateBrand(
       patch.socialDiscoverySearchStrategy !== undefined
         ? normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy)
         : mapBrandRow(existing).socialDiscoverySearchStrategy,
+    liftlineAutopilotConfig:
+      patch.liftlineAutopilotConfig !== undefined
+        ? normalizeLiftlineAutopilotConfig(patch.liftlineAutopilotConfig)
+        : mapBrandRow(existing).liftlineAutopilotConfig,
     updatedAt: nowIso(),
   };
   if (index < 0) {

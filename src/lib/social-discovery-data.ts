@@ -542,16 +542,18 @@ export async function listSocialDiscoveryPosts(options: SocialDiscoveryListOptio
 
 export async function listSocialDiscoveryAutoCommentCandidates(input: {
   brandId: string;
+  platform?: SocialDiscoveryPlatform;
   limit?: number;
   maxVideoAgeHours?: number;
 }): Promise<SocialDiscoveryPost[]> {
   const limit = Math.max(1, Math.min(500, Number(input.limit ?? 100) || 100));
   const maxVideoAgeHours = Math.max(1, Math.min(168, Number(input.maxVideoAgeHours ?? 24) || 24));
+  const platform = input.platform ?? "youtube";
   const newestAllowedMs = Date.now() - maxVideoAgeHours * 60 * 60 * 1000;
   const isCandidate = (post: SocialDiscoveryPost) => {
     if (post.brandId !== input.brandId) return false;
-    if (post.platform !== "youtube") return false;
-    if (post.provider !== "youtube-data-api") return false;
+    if (post.platform !== platform) return false;
+    if (platform === "youtube" && post.provider !== "youtube-data-api") return false;
     if (post.status !== "new") return false;
     if (post.commentDelivery?.postedAt) return false;
     if (post.pendingReply?.status === "scheduled") return false;
@@ -562,17 +564,20 @@ export async function listSocialDiscoveryAutoCommentCandidates(input: {
 
   const supabase = getSupabaseAdmin();
   if (supabase) {
-    const { data, error } = await supabase
+    let query = supabase
       .from(TABLE_POSTS)
       .select("*")
       .eq("brand_id", input.brandId)
-      .eq("platform", "youtube")
-      .in("provider", ["youtube-data-api", "youtube-websub"])
+      .eq("platform", platform)
       .eq("status", "new")
       .order("rising_score", { ascending: false })
       .order("relevance_score", { ascending: false })
       .order("discovered_at", { ascending: false })
       .limit(limit * 5);
+    if (platform === "youtube") {
+      query = query.in("provider", ["youtube-data-api", "youtube-websub"]);
+    }
+    const { data, error } = await query;
     if (!error) {
       return (data ?? [])
         .map((row: unknown) => mapPostRow(row))

@@ -616,6 +616,25 @@ export type SocialDiscoverySearchStrategy = {
   notes: string;
 };
 
+export type LiftlineAutopilotPlanId = "starter" | "growth" | "scale";
+
+export type LiftlineAutopilotConfig = {
+  enabled: boolean;
+  setupId: string;
+  source: "liftline";
+  planId: LiftlineAutopilotPlanId;
+  dailyCommentLimit: number;
+  accountLimit: number;
+  platforms: string[];
+  targets: string[];
+  voice: string;
+  voiceSample: string;
+  timingWindowMinutes: number;
+  boostMode: "automatic";
+  carefulMode: boolean;
+  lastSetupAt: string;
+};
+
 export type BrandRecord = {
   id: string;
   name: string;
@@ -629,6 +648,7 @@ export type BrandRecord = {
   socialDiscoveryYouTubeSubscriptions: SocialDiscoveryYouTubeSubscription[];
   socialDiscoveryYouTubeAutoCommentEnabled: boolean;
   socialDiscoverySearchStrategy: SocialDiscoverySearchStrategy | null;
+  liftlineAutopilotConfig: LiftlineAutopilotConfig | null;
   operablePersonas: string[];
   availableAssets: string[];
   targetMarkets: string[];

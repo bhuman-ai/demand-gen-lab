@@ -249,6 +249,10 @@ import {
   getCanonicalSenderPoolForBrand,
   type CanonicalSenderPool,
 } from "@/lib/senders";
+import {
+  isManualBatchLeadSource,
+  processManualBatchDispatchJob,
+} from "@/lib/manual-batch-outreach";
 
 const DEFAULT_TIMEZONE = "America/Los_Angeles";
 const DEFAULT_REPLY_AUTOSEND_MIN_DELAY_MINUTES = 40;
@@ -701,6 +705,9 @@ function isLeadSendableForTrafficLane(
   }
   if (getLeadEmailSuppressionReason(email)) {
     return false;
+  }
+  if (trafficLane === "outbound" && isManualBatchLeadSource(lead.sourceUrl)) {
+    return true;
   }
   return evaluateLeadAgainstQualityPolicy({
     lead: {
@@ -20614,6 +20621,10 @@ async function processOutreachJob(job: OutreachJob) {
   }
   if (job.jobType === "dispatch_messages") {
     await processDispatchMessagesJob(job);
+    return;
+  }
+  if (job.jobType === "manual_batch_dispatch") {
+    await processManualBatchDispatchJob(job);
     return;
   }
   if (job.jobType === "sync_replies") {

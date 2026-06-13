@@ -30,6 +30,7 @@ import type {
   OutreachProvisioningSettings,
   OutreachRunEvent,
   OutreachRunJob,
+  OutreachMessage,
   OutreachRun,
   RunViewModel,
   ReplyDraft,
@@ -45,6 +46,11 @@ import type {
   SourcingChainDecision,
   SourcingProbeResult,
 } from "@/lib/factory-types";
+import type {
+  ManualBatchRejectedContact,
+  ManualBatchSenderOption,
+  ManualBatchSummary,
+} from "@/lib/manual-batch-outreach";
 import type {
   OperatorAction,
   OperatorActivitySummary,
@@ -885,6 +891,50 @@ export async function fetchScaleCampaign(brandId: string, campaignId: string) {
   });
   const data = await readJson(response);
   return data.campaign as ScaleCampaignRecord;
+}
+
+export type ManualBatchConsoleState = {
+  batches: ManualBatchSummary[];
+  senders: ManualBatchSenderOption[];
+  outboundSendingEnabled: boolean;
+  maxBatchContacts: number;
+};
+
+export async function fetchManualBatchConsole(brandId: string): Promise<ManualBatchConsoleState> {
+  const response = await fetch(`/api/brands/${brandId}/manual-batches`, { cache: "no-store" });
+  const data = await readJson(response);
+  return {
+    batches: (Array.isArray(data.batches) ? data.batches : []) as ManualBatchSummary[],
+    senders: (Array.isArray(data.senders) ? data.senders : []) as ManualBatchSenderOption[],
+    outboundSendingEnabled: data.outboundSendingEnabled === true,
+    maxBatchContacts: Number(data.maxBatchContacts ?? 0) || 0,
+  };
+}
+
+export async function createManualBatchApi(
+  brandId: string,
+  input: {
+    senderAccountId: string;
+    batchName?: string;
+    contactsText: string;
+    subject: string;
+    body: string;
+    chunkSize?: number;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/manual-batches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return {
+    batchId: String(data.batchId ?? ""),
+    run: data.run as OutreachRun,
+    campaign: data.campaign as ScaleCampaignRecord,
+    rejected: (Array.isArray(data.rejected) ? data.rejected : []) as ManualBatchRejectedContact[],
+    messages: (Array.isArray(data.messages) ? data.messages : []) as OutreachMessage[],
+  };
 }
 
 export async function updateScaleCampaignApi(

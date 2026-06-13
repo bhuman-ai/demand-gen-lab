@@ -92,6 +92,7 @@ export type OutreachJobType =
   | "source_leads"
   | "schedule_messages"
   | "dispatch_messages"
+  | "manual_batch_dispatch"
   | "sync_replies"
   | "analyze_run"
   | "conversation_tick"
@@ -233,6 +234,7 @@ const SINGLETON_OUTREACH_JOB_TYPES = new Set<OutreachJobType>([
   "source_leads",
   "schedule_messages",
   "dispatch_messages",
+  "manual_batch_dispatch",
   "sync_replies",
   "analyze_run",
   "conversation_tick",
@@ -1329,9 +1331,16 @@ function mapJobRow(input: unknown): OutreachJob {
   return {
     id: String(row.id ?? ""),
     runId: String(row.run_id ?? row.runId ?? ""),
-    jobType: ["source_leads", "schedule_messages", "dispatch_messages", "sync_replies", "analyze_run", "conversation_tick", "monitor_deliverability"].includes(
-      String(row.job_type ?? row.jobType)
-    )
+    jobType: [
+      "source_leads",
+      "schedule_messages",
+      "dispatch_messages",
+      "manual_batch_dispatch",
+      "sync_replies",
+      "analyze_run",
+      "conversation_tick",
+      "monitor_deliverability",
+    ].includes(String(row.job_type ?? row.jobType))
       ? (String(row.job_type ?? row.jobType) as OutreachJobType)
       : "analyze_run",
     status: ["queued", "running", "completed", "failed"].includes(String(row.status))

@@ -1764,6 +1764,7 @@ export type OutreachRunJobType =
   | "source_leads"
   | "schedule_messages"
   | "dispatch_messages"
+  | "manual_batch_dispatch"
   | "sync_replies"
   | "analyze_run"
   | "conversation_tick"

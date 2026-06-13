@@ -4,6 +4,8 @@ import {
   launchManualBatch,
 } from "@/lib/manual-batch-outreach";
 
+export const maxDuration = 180;
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;

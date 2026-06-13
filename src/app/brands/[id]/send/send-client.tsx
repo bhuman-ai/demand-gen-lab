@@ -48,6 +48,31 @@ function batchStatusVariant(status: string) {
 
 const sampleContacts = "email,name,company,title\nalex@example.com,Alex Morgan,Example,Founder";
 
+function formatLaunchNotice(result: Awaited<ReturnType<typeof createManualBatchApi>>) {
+  const dispatch = result.dispatch;
+  if (!dispatch?.attempted) {
+    return `Created ${result.messages.length} messages. Dispatch has not started yet.`;
+  }
+
+  const sent = dispatch.sent;
+  const blocked = dispatch.failed + dispatch.canceled;
+  const remaining = dispatch.remaining;
+  if (!dispatch.ok) {
+    return `Created ${result.messages.length} messages, but immediate dispatch failed: ${dispatch.error}`;
+  }
+  if (sent > 0) {
+    return [
+      `Sent ${sent} now.`,
+      remaining > 0 ? `${remaining} still queued.` : "",
+      blocked > 0 ? `${blocked} blocked or failed.` : "",
+    ].filter(Boolean).join(" ");
+  }
+  if (blocked > 0) {
+    return `Created ${result.messages.length} messages, but ${blocked} were blocked or failed before sending.`;
+  }
+  return `Created ${result.messages.length} messages. ${remaining} still queued for dispatch.`;
+}
+
 function pickSenderAccountId(state: ManualBatchConsoleState, preferredSenderAccountId: string) {
   const preferred = preferredSenderAccountId
     ? state.senders.find((sender) => sender.accountId === preferredSenderAccountId && sender.ready)
@@ -135,7 +160,7 @@ export default function SendClient({
         chunkSize: Number(chunkSize) || undefined,
       });
       setRejected(result.rejected);
-      setNotice(`Queued ${result.messages.length} messages for Customer.io dispatch.`);
+      setNotice(formatLaunchNotice(result));
       setBatchName("");
       setContactsText("");
       await refresh();
@@ -150,7 +175,7 @@ export default function SendClient({
     <div className="space-y-7">
       <PageIntro
         title="Send Mail"
-        description="Customer.io batch sending for operator-supplied contacts."
+        description="Paste contacts and send the first Customer.io batch immediately."
         actions={
           <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw className="h-4 w-4" />
@@ -160,7 +185,7 @@ export default function SendClient({
         aside={
           <StatLedger
             items={[
-              { label: "Queued", value: formatCount(totals.scheduled), detail: "Waiting for manual batch dispatch." },
+              { label: "Queued", value: formatCount(totals.scheduled), detail: "Still waiting in manual batches." },
               { label: "Sent", value: formatCount(totals.sent), detail: latest ? `Latest ${formatDateTime(latest.run.createdAt)}` : "-" },
               { label: "Replies", value: formatCount(totals.replies), detail: latest?.latestReplyAt ? formatDateTime(latest.latestReplyAt) : "No linked replies yet." },
               { label: "Failed", value: formatCount(totals.failed), detail: "Canceled, bounced, or provider failed." },
@@ -175,7 +200,7 @@ export default function SendClient({
         </div>
       ) : null}
 
-      <SectionPanel title="New batch" description="Paste contacts, choose a Customer.io sender, and queue dispatch.">
+      <SectionPanel title="New batch" description="Paste contacts, choose a Customer.io sender, and send now.">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
           <div className="grid gap-4">
             <div className="grid gap-3 md:grid-cols-2">
@@ -223,7 +248,7 @@ export default function SendClient({
                 className="min-w-[9rem]"
               >
                 <Send className="h-4 w-4" />
-                {submitting ? "Queueing..." : "Send batch"}
+                {submitting ? "Sending..." : "Send now"}
               </Button>
             </div>
           </div>

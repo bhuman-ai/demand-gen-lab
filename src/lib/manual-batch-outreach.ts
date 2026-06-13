@@ -29,6 +29,7 @@ import {
   listRunLeads,
   listRunMessages,
   listOutreachAccounts,
+  updateOutreachJob,
   updateOutreachRun,
   updateRunLead,
   updateRunMessage,
@@ -137,6 +138,17 @@ export type ManualBatchLaunchResult = {
   accepted: ManualBatchAcceptedContact[];
   rejected: ManualBatchRejectedContact[];
   messages: OutreachMessage[];
+  dispatch: ManualBatchImmediateDispatchResult;
+};
+
+export type ManualBatchImmediateDispatchResult = {
+  attempted: boolean;
+  ok: boolean;
+  sent: number;
+  failed: number;
+  canceled: number;
+  remaining: number;
+  error: string;
 };
 
 function nowIso() {
@@ -405,6 +417,100 @@ function buildRunMetrics(input: {
     positiveReplies: runThreads.filter((thread) => thread.sentiment === "positive").length,
     negativeReplies: runThreads.filter((thread) => thread.sentiment === "negative").length,
   };
+}
+
+function manualBatchMessageCounts(messages: OutreachMessage[]) {
+  return {
+    sent: messages.filter((message) => ["sent", "replied"].includes(message.status)).length,
+    failed: messages.filter((message) => message.status === "failed").length,
+    canceled: messages.filter((message) => ["canceled", "bounced"].includes(message.status)).length,
+    remaining: messages.filter((message) => message.status === "scheduled").length,
+  };
+}
+
+async function processManualBatchDispatchJobInline(job: OutreachRunJob): Promise<ManualBatchImmediateDispatchResult> {
+  const before = manualBatchMessageCounts(await listRunMessages(job.runId));
+  const attempts = job.attempts + 1;
+  const runningJob = await updateOutreachJob(job.id, {
+    status: "running",
+    attempts,
+    lastError: "",
+  });
+  const jobForDispatch = runningJob ?? { ...job, status: "running" as const, attempts };
+
+  await createOutreachEvent({
+    runId: job.runId,
+    eventType: "job_started",
+    payload: {
+      jobId: job.id,
+      jobType: job.jobType,
+      attempt: attempts,
+      maxAttempts: job.maxAttempts,
+      inline: true,
+    },
+  });
+
+  try {
+    await processManualBatchDispatchJob(jobForDispatch);
+    await updateOutreachJob(job.id, {
+      status: "completed",
+      lastError: "",
+    });
+    await createOutreachEvent({
+      runId: job.runId,
+      eventType: "job_completed",
+      payload: {
+        jobId: job.id,
+        jobType: job.jobType,
+        attempt: attempts,
+        inline: true,
+      },
+    });
+
+    const after = manualBatchMessageCounts(await listRunMessages(job.runId));
+    return {
+      attempted: true,
+      ok: true,
+      sent: Math.max(0, after.sent - before.sent),
+      failed: Math.max(0, after.failed - before.failed),
+      canceled: Math.max(0, after.canceled - before.canceled),
+      remaining: after.remaining,
+      error: "",
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Manual batch dispatch failed.";
+    const willRetry = attempts < job.maxAttempts;
+    await updateOutreachJob(job.id, {
+      status: willRetry ? "queued" : "failed",
+      executeAfter: new Date(Date.now() + Math.min(60, attempts * 5) * 60 * 1000).toISOString(),
+      attempts,
+      lastError: message,
+    });
+    await createOutreachEvent({
+      runId: job.runId,
+      eventType: "job_failed",
+      payload: {
+        jobId: job.id,
+        jobType: job.jobType,
+        attempt: attempts,
+        maxAttempts: job.maxAttempts,
+        error: message,
+        willRetry,
+        inline: true,
+      },
+    });
+
+    const after = manualBatchMessageCounts(await listRunMessages(job.runId));
+    return {
+      attempted: true,
+      ok: false,
+      sent: Math.max(0, after.sent - before.sent),
+      failed: Math.max(0, after.failed - before.failed),
+      canceled: Math.max(0, after.canceled - before.canceled),
+      remaining: after.remaining,
+      error: message,
+    };
+  }
 }
 
 async function refreshManualBatchRunMetrics(run: OutreachRun) {
@@ -688,7 +794,7 @@ export async function launchManualBatch(input: ManualBatchLaunchInput): Promise<
       chunkSize,
     },
   });
-  await enqueueOutreachJob({
+  const dispatchJob = await enqueueOutreachJob({
     runId: run.id,
     jobType: "manual_batch_dispatch",
     executeAfter: nowIso(),
@@ -699,6 +805,7 @@ export async function launchManualBatch(input: ManualBatchLaunchInput): Promise<
       senderAccountId: account.id,
     },
   });
+  const dispatch = await processManualBatchDispatchJobInline(dispatchJob);
 
   return {
     batchId,
@@ -707,6 +814,7 @@ export async function launchManualBatch(input: ManualBatchLaunchInput): Promise<
     accepted,
     rejected: parsed.rejected,
     messages,
+    dispatch,
   };
 }
 

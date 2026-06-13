@@ -47,6 +47,7 @@ import type {
   SourcingProbeResult,
 } from "@/lib/factory-types";
 import type {
+  ManualBatchImmediateDispatchResult,
   ManualBatchRejectedContact,
   ManualBatchSenderOption,
   ManualBatchSummary,
@@ -934,6 +935,7 @@ export async function createManualBatchApi(
     campaign: data.campaign as ScaleCampaignRecord,
     rejected: (Array.isArray(data.rejected) ? data.rejected : []) as ManualBatchRejectedContact[],
     messages: (Array.isArray(data.messages) ? data.messages : []) as OutreachMessage[],
+    dispatch: data.dispatch as ManualBatchImmediateDispatchResult,
   };
 }
 

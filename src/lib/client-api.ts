@@ -1010,11 +1010,12 @@ export async function createOutboxBatchApi(
       | null,
     prospectSourcing: data.prospectSourcing as
       | {
-          provider: "exa";
+          provider: "airscale";
           requested: number;
           sourced: number;
           rejected: number;
           diagnosticsCount: number;
+          creditsUsed: number;
           budgetUsedUsd: number;
           exaSpendUsd: number;
           dataForSeoSpendUsd: number;

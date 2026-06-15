@@ -9,6 +9,7 @@ import { isInternalCronAuthorized, runCronTask } from "@/lib/internal-cron";
 import { runLeadrChannelSyncTick } from "@/lib/leadr-channel";
 import { runMissionTick } from "@/lib/mission-learning";
 import { runBrandActivationAutopilot } from "@/lib/brand-activation-autopilot";
+import { runOutboxAutopilotTick } from "@/lib/outbox-v1";
 
 export const maxDuration = 180;
 
@@ -42,6 +43,7 @@ async function handleOpsTick(request: Request) {
     missions,
     leadrSync,
     brandActivation,
+    outboxAutopilot,
     campaignHopper,
   ] = await Promise.all([
     runCronTask("mailpoolSync", () => runMailpoolOutreachAccountSyncTick(6), {
@@ -70,6 +72,9 @@ async function handleOpsTick(request: Request) {
     runCronTask("brandActivation", () => runBrandActivationAutopilot(), {
       timeoutMs: 105_000,
     }),
+    runCronTask("outboxAutopilot", () => runOutboxAutopilotTick(1), {
+      timeoutMs: 120_000,
+    }),
     runCronTask("campaignHopper", () => runCampaignHopperTick(3), {
       timeoutMs: 120_000,
     }),
@@ -86,7 +91,8 @@ async function handleOpsTick(request: Request) {
       senderLaunch.ok &&
       missions.ok &&
       leadrSync.ok &&
-      brandActivation.ok,
+      brandActivation.ok &&
+      outboxAutopilot.ok,
     criticalPath: "ops",
     mailpoolSync,
     warmupCampaigns,
@@ -98,6 +104,7 @@ async function handleOpsTick(request: Request) {
     missions,
     leadrSync,
     brandActivation,
+    outboxAutopilot,
   });
 }
 

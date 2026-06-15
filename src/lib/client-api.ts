@@ -973,9 +973,12 @@ export async function createOutboxBatchApi(
   input: {
     senderAccountId: string;
     batchName?: string;
-    sourceMode?: "contacts" | "airscale";
-    contactsText: string;
+    sourceMode?: "contacts" | "airscale" | "auto";
+    contactsText?: string;
     finderText?: string;
+    prospectQuery?: string;
+    prospectOffer?: string;
+    maxProspects?: number;
     subject: string;
     body: string;
     requestedSendNow?: number;
@@ -1005,9 +1008,23 @@ export async function createOutboxBatchApi(
           truncated: boolean;
         }
       | null,
+    prospectSourcing: data.prospectSourcing as
+      | {
+          provider: "exa";
+          requested: number;
+          sourced: number;
+          rejected: number;
+          diagnosticsCount: number;
+          budgetUsedUsd: number;
+          exaSpendUsd: number;
+          dataForSeoSpendUsd: number;
+          sample: Array<{ name: string; company: string; title: string; domain: string }>;
+        }
+      | null,
     messages: (Array.isArray(data.messages) ? data.messages : []) as OutreachMessage[],
     counts: asObject(data.counts) as {
       created: number;
+      sourced: number;
       found: number;
       sent: number;
       failed: number;

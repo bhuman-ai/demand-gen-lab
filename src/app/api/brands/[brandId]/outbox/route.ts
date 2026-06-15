@@ -19,6 +19,13 @@ function optionalNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function sourceMode(value: unknown) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "auto") return "auto";
+  if (normalized === "airscale") return "airscale";
+  return "contacts";
+}
+
 export async function GET(request: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
   const url = new URL(request.url);
@@ -44,7 +51,10 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       batchName: String(body.batchName ?? "").trim(),
       contactsText: String(body.contactsText ?? "").trim(),
       finderText: String(body.finderText ?? "").trim(),
-      sourceMode: String(body.sourceMode ?? "").trim() === "airscale" ? "airscale" : "contacts",
+      sourceMode: sourceMode(body.sourceMode),
+      prospectQuery: String(body.prospectQuery ?? "").trim(),
+      prospectOffer: String(body.prospectOffer ?? "").trim(),
+      maxProspects: optionalNumber(body.maxProspects),
       subject: String(body.subject ?? "").trim(),
       body: String(body.body ?? "").trim(),
       requestedSendNow: optionalNumber(body.requestedSendNow),

@@ -4251,6 +4251,7 @@ async function sourceLeadsFromExa(input: {
   resumeState?: DeferredSourcingState | null;
   candidateOffset?: number;
   sourceAttempt?: number;
+  skipEmailEnrichment?: boolean;
   signal?: AbortSignal;
 }) {
   const companyQueryLimit = Math.max(1, Math.min(2, input.maxLeads <= 50 ? 1 : 2));
@@ -4734,7 +4735,15 @@ async function sourceLeadsFromExa(input: {
     count: enrichmentEligibleLeads.length,
     includeDomainsCount: rawLeads.length,
   });
-  if (leadsNeedingEmailEnrichment > 0 && enrichmentEligibleLeads.length > 0 && !canRunEmailFinder) {
+  if (input.skipEmailEnrichment === true) {
+    diagnostics.push({
+      stage: "email_enrichment",
+      provider: "exa",
+      query: "EmailFinder batch skipped: outbox will resolve emails through Airscale after prospect sourcing",
+      count: 0,
+      includeDomainsCount: enrichmentEligibleLeads.length,
+    });
+  } else if (leadsNeedingEmailEnrichment > 0 && enrichmentEligibleLeads.length > 0 && !canRunEmailFinder) {
     emailEnrichment.error = "EMAIL_FINDER_API_BASE_URL is missing";
     diagnostics.push({
       stage: "email_enrichment",
@@ -4744,7 +4753,7 @@ async function sourceLeadsFromExa(input: {
       includeDomainsCount: leadsNeedingEmailEnrichment,
     });
   }
-  if (canRunEmailFinder && enrichmentEligibleLeads.length > 0) {
+  if (input.skipEmailEnrichment !== true && canRunEmailFinder && enrichmentEligibleLeads.length > 0) {
     const eligibleIndexedLeads = rawLeads
       .map((lead, index) => ({ lead, index }))
       .filter(({ lead }) => {
@@ -4899,6 +4908,75 @@ async function sourceLeadsFromExa(input: {
     pendingDataForSeo: null,
     pendingEmailEnrichment,
   } satisfies ExaPeopleSourcingResult;
+}
+
+export type OutboxSourcedProspect = {
+  name: string;
+  company: string;
+  title: string;
+  domain: string;
+  sourceUrl: string;
+};
+
+export type OutboxProspectSourcingResult = {
+  prospects: OutboxSourcedProspect[];
+  rejectedCount: number;
+  diagnostics: Array<Record<string, unknown>>;
+  queryPlan: Record<string, unknown>;
+  budgetUsedUsd: number;
+  exaSpendUsd: number;
+  dataForSeoSpendUsd: number;
+};
+
+export async function sourceOutboxProspects(input: {
+  brandName?: string;
+  brandWebsite?: string;
+  targetAudience: string;
+  offer: string;
+  maxProspects: number;
+  signal?: AbortSignal;
+}): Promise<OutboxProspectSourcingResult> {
+  const targetAudience = trimText(input.targetAudience, 500);
+  const offer = trimText(input.offer, 500);
+  if (!targetAudience) throw new Error("Target audience is required for prospect sourcing.");
+  if (!offer) throw new Error("Offer is required for prospect sourcing.");
+  const exaApiKey = platformExaApiKey();
+  if (!exaApiKey) throw new Error("EXA_API_KEY is missing. Add it before using automatic prospect sourcing.");
+  const maxProspects = Math.max(1, Math.min(100, Math.trunc(Number(input.maxProspects) || 25)));
+  const qualityPolicy = buildFallbackLeadQualityPolicy({
+    brandWebsite: input.brandWebsite ?? "",
+    targetAudience,
+    offer,
+    experimentName: input.brandName ? `${input.brandName} Outbox` : "Outbox",
+  });
+  const sourced = await sourceLeadsFromExa({
+    exaApiKey,
+    dataForSeoCredentials: null,
+    targetAudience,
+    triggerContext: "outbox_auto_prospect_source",
+    offer,
+    qualityPolicy,
+    maxLeads: maxProspects,
+    allowMissingEmail: true,
+    skipEmailEnrichment: true,
+    sourceAttempt: 0,
+    signal: input.signal,
+  });
+  return {
+    prospects: sourced.acceptedLeads.slice(0, maxProspects).map((lead) => ({
+      name: trimText(lead.name, 120),
+      company: trimText(lead.company, 120),
+      title: trimText(lead.title, 160),
+      domain: trimText(lead.domain, 160),
+      sourceUrl: trimText(lead.sourceUrl, 500),
+    })),
+    rejectedCount: sourced.rejectedLeads.length,
+    diagnostics: sourced.diagnostics as Array<Record<string, unknown>>,
+    queryPlan: sourced.queryPlan as unknown as Record<string, unknown>,
+    budgetUsedUsd: sourced.budgetUsedUsd,
+    exaSpendUsd: sourced.exaSpendUsd,
+    dataForSeoSpendUsd: sourced.dataForSeoSpendUsd,
+  };
 }
 
 function stageFromValue(value: string): LeadChainStepStage | null {

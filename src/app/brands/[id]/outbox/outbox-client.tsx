@@ -25,6 +25,7 @@ import type { BrandRecord } from "@/lib/factory-types";
 
 const sampleFinderTargets = "name,company,domain,title,linkedin\nAlex Morgan,Example Co,example.com,Founder,";
 const sampleContacts = "email,name,company,title\nalex@example.com,Alex Morgan,Example Co,Founder";
+const sampleProspectQuery = "Heads of marketing at B2B SaaS companies hiring SDRs, 11-200 employees, United States";
 
 function formatCount(value: number) {
   return value.toString().padStart(2, "0");
@@ -64,14 +65,15 @@ function pickSenderAccountId(state: OutboxConsoleState, preferredSenderAccountId
 }
 
 function formatLaunchNotice(result: Awaited<ReturnType<typeof createOutboxBatchApi>>) {
+  const sourcingPrefix = result.prospectSourcing ? `Sourced ${result.prospectSourcing.sourced} prospects. ` : "";
   const finderPrefix = result.finder ? `Found ${result.finder.found} with Airscale. ` : "";
   if (result.counts.sent > 0) {
-    return `${finderPrefix}Sent ${result.counts.sent} now. Held ${result.counts.held}. Failed ${result.counts.failed}.`;
+    return `${sourcingPrefix}${finderPrefix}Sent ${result.counts.sent} now. Held ${result.counts.held}. Failed ${result.counts.failed}.`;
   }
   if (result.counts.held > 0) {
-    return `${finderPrefix}Created ${result.counts.created} messages, all held by sender policy.`;
+    return `${sourcingPrefix}${finderPrefix}Created ${result.counts.created} messages, all held by sender policy.`;
   }
-  return `${finderPrefix}Created ${result.counts.created} messages. Failed ${result.counts.failed}.`;
+  return `${sourcingPrefix}${finderPrefix}Created ${result.counts.created} messages. Failed ${result.counts.failed}.`;
 }
 
 function optionalNumericInput(value: string) {
@@ -95,7 +97,9 @@ export default function OutboxClient({
   const [notice, setNotice] = useState("");
   const [senderAccountId, setSenderAccountId] = useState("");
   const [batchName, setBatchName] = useState("");
-  const [sourceMode, setSourceMode] = useState<"airscale" | "contacts">("airscale");
+  const [sourceMode, setSourceMode] = useState<"auto" | "airscale" | "contacts">("auto");
+  const [prospectQuery, setProspectQuery] = useState("");
+  const [maxProspects, setMaxProspects] = useState("50");
   const [finderText, setFinderText] = useState("");
   const [contactsText, setContactsText] = useState("");
   const [subject, setSubject] = useState("");
@@ -171,6 +175,9 @@ export default function OutboxClient({
         sourceMode,
         contactsText: sourceMode === "contacts" ? contactsText : "",
         finderText: sourceMode === "airscale" ? finderText : "",
+        prospectQuery: sourceMode === "auto" ? prospectQuery : "",
+        prospectOffer: body || subject,
+        maxProspects: sourceMode === "auto" ? optionalNumericInput(maxProspects) : undefined,
         subject,
         body,
         requestedSendNow: optionalNumericInput(requestedSendNow),
@@ -192,7 +199,7 @@ export default function OutboxClient({
     <div className="space-y-7">
       <PageIntro
         title="Outbox"
-        description="Airscale email finding, policy-capped Customer.io sending, and a visible sent, held, failed, and reply ledger."
+        description="Automatic prospect sourcing, Airscale email finding, policy-capped Customer.io sending, and a visible sent, held, failed, and reply ledger."
         actions={
           <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw className="h-4 w-4" />
@@ -238,7 +245,7 @@ export default function OutboxClient({
         ) : null}
       </SectionPanel>
 
-      <SectionPanel title="New batch" description="Find emails with Airscale, choose a sender, and send only what policy allows now.">
+      <SectionPanel title="New batch" description="Find prospects, resolve emails, and send only what policy allows now.">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
           <div className="grid gap-4">
             <div className="grid gap-3 md:grid-cols-3">
@@ -266,27 +273,48 @@ export default function OutboxClient({
               <Select
                 value={sourceMode}
                 onChange={(event) => {
-                  setSourceMode(event.target.value === "contacts" ? "contacts" : "airscale");
+                  const value = event.target.value;
+                  setSourceMode(value === "contacts" ? "contacts" : value === "airscale" ? "airscale" : "auto");
                   setError("");
                   setNotice("");
                   setRejected([]);
                 }}
               >
-                <option value="airscale">Find with Airscale</option>
+                <option value="auto">Find prospects</option>
+                <option value="airscale">Find emails for people</option>
                 <option value="contacts">Paste emails</option>
               </Select>
             </div>
-            <div>
-              <Label>{sourceMode === "airscale" ? "People to find" : "Contacts"}</Label>
-              <Textarea
-                value={sourceMode === "airscale" ? finderText : contactsText}
-                onChange={(event) =>
-                  sourceMode === "airscale" ? setFinderText(event.target.value) : setContactsText(event.target.value)
-                }
-                placeholder={sourceMode === "airscale" ? sampleFinderTargets : sampleContacts}
-                className="min-h-[180px] font-mono text-xs"
-              />
-            </div>
+            {sourceMode === "auto" ? (
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(8rem,10rem)]">
+                <div>
+                  <Label>Target prospects</Label>
+                  <Textarea
+                    value={prospectQuery}
+                    onChange={(event) => setProspectQuery(event.target.value)}
+                    placeholder={sampleProspectQuery}
+                    className="min-h-[120px]"
+                  />
+                </div>
+                <div>
+                  <Label>Find</Label>
+                  <Input value={maxProspects} onChange={(event) => setMaxProspects(event.target.value)} inputMode="numeric" />
+                </div>
+              </div>
+            ) : null}
+            {sourceMode === "auto" ? null : (
+              <div>
+                <Label>{sourceMode === "airscale" ? "People to find" : "Contacts"}</Label>
+                <Textarea
+                  value={sourceMode === "airscale" ? finderText : contactsText}
+                  onChange={(event) =>
+                    sourceMode === "airscale" ? setFinderText(event.target.value) : setContactsText(event.target.value)
+                  }
+                  placeholder={sourceMode === "airscale" ? sampleFinderTargets : sampleContacts}
+                  className="min-h-[180px] font-mono text-xs"
+                />
+              </div>
+            )}
             <div>
               <Label>Subject</Label>
               <Input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Quick question for {{company}}" />
@@ -303,7 +331,13 @@ export default function OutboxClient({
                 className="min-w-[9rem]"
               >
                 <Send className="h-4 w-4" />
-                {submitting ? "Sending..." : sourceMode === "airscale" ? "Find + send" : "Send allowed"}
+                {submitting
+                  ? "Sending..."
+                  : sourceMode === "auto"
+                    ? "Find prospects + send"
+                    : sourceMode === "airscale"
+                      ? "Find emails + send"
+                      : "Send allowed"}
               </Button>
             </div>
           </div>

@@ -2081,6 +2081,8 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         continue;
       }
 
+      const launchSendNow = Math.min(requestedSendNow || 25, policy.availableNow);
+      const launchMaxProspects = Math.max(1, Math.min(maxProspects, launchSendNow || policy.availableNow));
       const launch = await launchOutboxBatch({
         brandId: brand.id,
         senderAccountId: selectedSender.accountId,
@@ -2088,10 +2090,10 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         sourceMode: "auto",
         prospectQuery: configuredTargetAudience || defaultOutboxAutopilotTargetAudience(brand),
         prospectOffer: configuredBody || brand.product || brand.name,
-        maxProspects,
+        maxProspects: launchMaxProspects,
         subject: configuredSubject || defaultOutboxAutopilotSubject(),
         body: configuredBody || defaultOutboxAutopilotBody(brand),
-        requestedSendNow: Math.min(requestedSendNow || 25, policy.availableNow),
+        requestedSendNow: launchSendNow,
         timezone,
       });
       results.push({

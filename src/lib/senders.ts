@@ -17,6 +17,7 @@ import {
   getOutreachGmailUiLoginState,
   getOutreachMailboxEmail,
   getOutreachSenderBackingIssue,
+  supportsCustomerIoDelivery,
 } from "@/lib/outreach-account-helpers";
 import {
   getBrandOutreachAssignment,
@@ -49,10 +50,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-function asArray(value: unknown) {
-  return Array.isArray(value) ? value : [];
-}
-
 function normalizeEmail(value: string) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -68,15 +65,6 @@ function normalizeDomain(value: string) {
 
 function senderDomainFromEmail(value: string) {
   return normalizeEmail(value).split("@")[1] ?? "";
-}
-
-function latestTimestamp(...values: Array<string | undefined | null>) {
-  return (
-    values
-      .map((value) => String(value ?? "").trim())
-      .filter(Boolean)
-      .sort((left, right) => (left < right ? 1 : -1))[0] ?? ""
-  );
 }
 
 function normalizeSenderState(value: unknown): CanonicalSenderState {
@@ -217,6 +205,7 @@ function deriveCanonicalSenderState(input: {
   const row = input.row;
   const senderBackingIssue = getOutreachSenderBackingIssue(deliveryAccount, mailboxAccount);
   const loginState = getOutreachGmailUiLoginState(mailboxAccount ?? deliveryAccount);
+  const usesCustomerIoDelivery = deliveryAccount ? supportsCustomerIoDelivery(deliveryAccount) : false;
 
   if (!deliveryAccount) {
     return {
@@ -256,7 +245,8 @@ function deriveCanonicalSenderState(input: {
     };
   }
 
-  if (loginState === "login_required" || loginState === "error") {
+  // Customer.io sends through its API; Gmail UI readiness only gates Gmail-UI delivery.
+  if (!usesCustomerIoDelivery && (loginState === "login_required" || loginState === "error")) {
     return {
       state: "blocked" as const,
       blockedReason:

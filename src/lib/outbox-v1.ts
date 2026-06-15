@@ -1758,8 +1758,7 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         continue;
       }
 
-      const state = await getOutboxConsoleState(brand.id, senderAccountId);
-      if (!state.outboundSendingEnabled) {
+      if (!outboundSendingEnabled()) {
         results.push(outboxAutopilotSkip({
           brand,
           reason: "outbound_sending_disabled",
@@ -1769,9 +1768,10 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         continue;
       }
 
+      const senders = await senderOptionsForBrand(brand.id);
       const selectedSender = senderAccountId
-        ? state.senders.find((sender) => sender.accountId === senderAccountId) ?? null
-        : state.senders.find((sender) => sender.ready) ?? null;
+        ? senders.find((sender) => sender.accountId === senderAccountId) ?? null
+        : senders.find((sender) => sender.ready) ?? null;
       if (!selectedSender) {
         results.push(outboxAutopilotSkip({
           brand,
@@ -1790,10 +1790,29 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         }));
         continue;
       }
-      if (!state.selectedPolicy || state.selectedPolicy.availableNow <= 0) {
+      const account = await getOutreachAccount(selectedSender.accountId).catch(() => null);
+      if (!account) {
         results.push(outboxAutopilotSkip({
           brand,
-          reason: state.selectedPolicy?.reasons[0] || "sender_capacity_unavailable",
+          reason: "sender_account_not_found",
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+      const policy = await policyForSender({
+        brandId: brand.id,
+        account,
+        requestedContacts: maxProspects,
+        requestedSendNow: requestedSendNow || maxProspects,
+      });
+      if (policy.availableNow <= 0) {
+        const reason =
+          policy.reasons[0] ||
+          `sender_capacity_unavailable:${policy.senderState}:sent_today_${policy.sentToday}:daily_cap_${policy.dailyCap}:available_now_${policy.availableNow}`;
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason,
           senderAccountId: selectedSender.accountId,
           cooldownHours,
         }));
@@ -1810,7 +1829,7 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         maxProspects,
         subject: configuredSubject || defaultOutboxAutopilotSubject(),
         body: configuredBody || defaultOutboxAutopilotBody(brand),
-        requestedSendNow: Math.min(requestedSendNow || 25, state.selectedPolicy.availableNow),
+        requestedSendNow: Math.min(requestedSendNow || 25, policy.availableNow),
         timezone,
       });
       results.push({

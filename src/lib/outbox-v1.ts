@@ -48,10 +48,6 @@ import {
   getLeadEmailSuppressionReason,
   sendOutreachMessage,
 } from "@/lib/outreach-providers";
-import {
-  sourceOutboxProspects,
-  type OutboxProspectSourcingResult,
-} from "@/lib/outreach-runtime";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const OUTBOX_V1_EXTERNAL_REF_PREFIX = "outbox_v1:";
@@ -93,11 +89,12 @@ type OutboxFinderSummary = {
 };
 
 type OutboxProspectSourcingSummary = {
-  provider: "exa";
+  provider: "airscale";
   requested: number;
   sourced: number;
   rejected: number;
   diagnosticsCount: number;
+  creditsUsed: number;
   budgetUsedUsd: number;
   exaSpendUsd: number;
   dataForSeoSpendUsd: number;
@@ -107,6 +104,25 @@ type OutboxProspectSourcingSummary = {
     title: string;
     domain: string;
   }>;
+};
+
+type OutboxSourcedProspect = {
+  name: string;
+  company: string;
+  title: string;
+  domain: string;
+  sourceUrl: string;
+};
+
+type OutboxProspectSourcingResult = {
+  prospects: OutboxSourcedProspect[];
+  rejectedCount: number;
+  diagnostics: Array<Record<string, unknown>>;
+  queryPlan: Record<string, unknown>;
+  creditsUsed: number;
+  budgetUsedUsd: number;
+  exaSpendUsd: number;
+  dataForSeoSpendUsd: number;
 };
 
 export type OutboxSenderOption = {
@@ -250,6 +266,21 @@ function outboundSendingEnabled() {
   return ["1", "true", "yes", "on"].includes(raw);
 }
 
+function cleanEnvValue(value: unknown) {
+  return String(value ?? "").trim().replace(/^['"]|['"]$/g, "");
+}
+
+function airscaleApiKey() {
+  return cleanEnvValue(process.env.AIRSCALE_API_KEY ?? process.env.EMAIL_FINDER_AIRSCALE_API_KEY);
+}
+
+function airscaleBaseUrl() {
+  return (
+    cleanEnvValue(process.env.AIRSCALE_API_BASE_URL ?? process.env.EMAIL_FINDER_AIRSCALE_BASE_URL) ||
+    "https://api.airscale.io"
+  ).replace(/\/+$/, "");
+}
+
 function compactText(value: unknown, max = 180) {
   const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
   return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}...` : normalized;
@@ -292,6 +323,18 @@ function domainFromUrl(value: unknown) {
   }
 }
 
+function firstNonEmpty(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = compactText(value, 500);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function cleanLeadText(value: unknown, max = 180) {
+  return compactText(String(value ?? "").replace(/[^\p{L}\p{M}\p{N}\s&.,'()/+-]/gu, " "), max);
+}
+
 function parseCsvLine(line: string) {
   const cells: string[] = [];
   let current = "";
@@ -316,6 +359,225 @@ function parseCsvLine(line: string) {
   }
   cells.push(current.trim());
   return cells;
+}
+
+function splitEnvLines(value: unknown) {
+  return compactText(value, 2_000)
+    .split(/\r?\n|,/)
+    .map((entry) => compactText(entry, 120))
+    .filter(Boolean);
+}
+
+function airscaleConfiguredFilters() {
+  const raw = cleanEnvValue(process.env.OUTBOX_AUTOPILOT_AIRSCALE_FILTERS_JSON);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return asRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function defaultAirscaleJobFilters(targetAudience: string) {
+  const normalized = targetAudience.toLowerCase();
+  const jobs: string[] = [];
+  const add = (...values: string[]) => {
+    for (const value of values) {
+      if (!jobs.includes(value)) jobs.push(value);
+    }
+  };
+  if (/\bgrowth\b/.test(normalized)) add("Head of Growth", "VP Growth", "Growth Lead");
+  if (/\bdemand\s*gen|demand generation\b/.test(normalized)) {
+    add("Head of Demand Generation", "Demand Generation Manager", "VP Demand Generation");
+  }
+  if (/\boutbound|sales development|sdr|bdr\b/.test(normalized)) {
+    add("Head of Sales Development", "SDR Manager", "BDR Manager", "VP Sales");
+  }
+  if (/\blifecycle|customer onboarding|retention\b/.test(normalized)) {
+    add("Lifecycle Marketing Manager", "Head of Lifecycle Marketing", "Customer Marketing Lead");
+  }
+  if (/\bfounder|founders\b/.test(normalized)) add("Founder", "Co-Founder", "CEO");
+  if (!jobs.length) add("Founder", "CEO", "Head of Growth", "VP Sales");
+  return jobs.slice(0, 12);
+}
+
+function buildAirscaleLeadFilters(input: {
+  targetAudience: string;
+  offer: string;
+}) {
+  const configured = airscaleConfiguredFilters();
+  if (configured && Object.keys(configured).length > 0) {
+    return {
+      ...configured,
+      searchMode: String(configured.searchMode ?? "SMART").trim() || "SMART",
+    };
+  }
+
+  const audience = compactText(input.targetAudience, 1_500);
+  const offer = compactText(input.offer, 1_000);
+  const normalized = `${audience} ${offer}`.toLowerCase();
+  const peopleLocations = splitEnvLines(process.env.OUTBOX_AUTOPILOT_AIRSCALE_PEOPLE_LOCATIONS);
+  const companySizes = splitEnvLines(process.env.OUTBOX_AUTOPILOT_AIRSCALE_COMPANY_SIZES);
+  const industries = splitEnvLines(process.env.OUTBOX_AUTOPILOT_AIRSCALE_INDUSTRIES);
+  const jobs = splitEnvLines(process.env.OUTBOX_AUTOPILOT_AIRSCALE_JOBS);
+
+  return {
+    job: jobs.length ? jobs : defaultAirscaleJobFilters(audience),
+    peopleLocation: peopleLocations.length
+      ? peopleLocations
+      : /\bunited states\b|\busa\b|\bu\.s\./.test(normalized)
+        ? ["United States"]
+        : undefined,
+    size: companySizes.length
+      ? companySizes.join("\n")
+      : /11\s*-\s*500|11 to 500|11-500/.test(normalized)
+        ? "11-20\n21-50\n51-100\n101-200\n201-500"
+        : undefined,
+    industry: industries.length
+      ? industries.join("\n")
+      : /\bsaas|software|b2b\b/.test(normalized)
+        ? "software development\nit services and it consulting"
+        : undefined,
+    profileKeywords: [
+      "growth",
+      "outbound",
+      "demand generation",
+      "sales development",
+      "lifecycle marketing",
+      "customer onboarding",
+    ].join("\n"),
+    companyKeywords: compactText(audience, 500),
+    searchMode: "SMART",
+  };
+}
+
+function prospectFromAirscaleRow(row: Record<string, unknown>): OutboxSourcedProspect | null {
+  const profile = asRecord(row.profile);
+  const link = asRecord(row.link);
+  const positionGroup = asRecord(asArray(row.position_groups)[0] ?? asArray(row.positionGroups)[0]);
+  const positionCompany = asRecord(positionGroup.company);
+  const position = asRecord(asArray(positionGroup.profile_positions)[0] ?? asArray(positionGroup.profilePositions)[0]);
+  const companyRecord = asRecord(row.company);
+  const companyLink = asRecord(companyRecord.link);
+  const firstName = cleanLeadText(profile.first_name ?? profile.firstName ?? row.firstName ?? row.first_name, 80);
+  const lastName = cleanLeadText(profile.last_name ?? profile.lastName ?? row.lastName ?? row.last_name, 80);
+  const name = firstNonEmpty(
+    cleanLeadText(profile.full_name ?? profile.fullName ?? row.name ?? row.fullName, 120),
+    [firstName, lastName].filter(Boolean).join(" ")
+  );
+  const company = firstNonEmpty(
+    cleanLeadText(positionCompany.name, 120),
+    cleanLeadText(position.company, 120),
+    cleanLeadText(companyRecord.name, 120),
+    cleanLeadText(row.companyName, 120)
+  );
+  const title = firstNonEmpty(
+    cleanLeadText(profile.title, 160),
+    cleanLeadText(position.title, 160),
+    cleanLeadText(profile.headline, 160)
+  );
+  const website = firstNonEmpty(
+    positionCompany.domain,
+    positionCompany.website,
+    companyRecord.domain,
+    companyRecord.website,
+    companyLink.website,
+    row.domain,
+    row.companyDomain
+  );
+  const sourceUrl = firstNonEmpty(
+    link.linkedin,
+    profile.linkedin,
+    profile.linkedin_url,
+    row.linkedinUrl,
+    row.linkedin_url,
+    row.sourceUrl,
+    companyLink.linkedin,
+    positionCompany.url,
+    website
+  );
+  const domain = normalizeDomain(website) || domainFromUrl(website);
+  if (!name || (!domain && !sourceUrl)) return null;
+  return {
+    name: compactText(name, 120),
+    company: compactText(company, 120),
+    title: compactText(title, 160),
+    domain,
+    sourceUrl: compactText(sourceUrl, 500),
+  };
+}
+
+async function sourceOutboxProspectsFromAirscale(input: {
+  targetAudience: string;
+  offer: string;
+  maxProspects: number;
+  signal?: AbortSignal;
+}): Promise<OutboxProspectSourcingResult> {
+  const targetAudience = compactText(input.targetAudience, 1_500);
+  const offer = compactText(input.offer, 1_000);
+  if (!targetAudience) throw new Error("Target audience is required for prospect sourcing.");
+  if (!offer) throw new Error("Offer is required for prospect sourcing.");
+  const key = airscaleApiKey();
+  if (!key) throw new Error("AIRSCALE_API_KEY is missing. Add it before using automatic Airscale prospect sourcing.");
+  const maxProspects = Math.max(1, Math.min(100, Math.trunc(Number(input.maxProspects) || 25)));
+  const filters = buildAirscaleLeadFilters({ targetAudience, offer });
+  const body = {
+    filters,
+    page: 0,
+    size: maxProspects,
+  };
+  const response = await fetch(`${airscaleBaseUrl()}/v1/leads-finder`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: input.signal,
+  });
+  const rawText = await response.text();
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = rawText ? asRecord(JSON.parse(rawText)) : {};
+  } catch {
+    payload = { raw: rawText.slice(0, 500) };
+  }
+  if (!response.ok) {
+    const message = compactText(payload.message ?? payload.error ?? rawText, 500);
+    throw new Error(`Airscale leads finder failed (${response.status}): ${message || "unknown_error"}`);
+  }
+
+  const rows = asArray(payload.rows).map(asRecord);
+  const prospects = rows
+    .map(prospectFromAirscaleRow)
+    .filter((prospect): prospect is OutboxSourcedProspect => Boolean(prospect))
+    .slice(0, maxProspects);
+  const rejectedCount = Math.max(0, rows.length - prospects.length);
+  const creditsUsed = Number((rows.length * 0.1).toFixed(2));
+  return {
+    prospects,
+    rejectedCount,
+    diagnostics: [
+      {
+        provider: "airscale",
+        total: Number(payload.total ?? rows.length) || rows.length,
+        returned: rows.length,
+        usable: prospects.length,
+      },
+    ],
+    queryPlan: {
+      provider: "airscale",
+      endpoint: "/v1/leads-finder",
+      filters,
+      page: Number(payload.page ?? 0) || 0,
+      size: Number(payload.size ?? maxProspects) || maxProspects,
+    },
+    creditsUsed,
+    budgetUsedUsd: 0,
+    exaSpendUsd: 0,
+    dataForSeoSpendUsd: 0,
+  };
 }
 
 function finderHeaderFieldName(value: string) {
@@ -364,11 +626,12 @@ function prospectSourcingSummary(
   requested: number
 ): OutboxProspectSourcingSummary {
   return {
-    provider: "exa",
+    provider: "airscale",
     requested,
     sourced: sourced.prospects.length,
     rejected: sourced.rejectedCount,
     diagnosticsCount: sourced.diagnostics.length,
+    creditsUsed: sourced.creditsUsed,
     budgetUsedUsd: sourced.budgetUsedUsd,
     exaSpendUsd: sourced.exaSpendUsd,
     dataForSeoSpendUsd: sourced.dataForSeoSpendUsd,
@@ -423,13 +686,14 @@ function parseOutboxFinderTargets(text: string): {
 
     const name = compactText(record.name || [record.firstName, record.lastName].filter(Boolean).join(" "), 120);
     const sourceUrl = String(record.sourceUrl ?? "").trim();
-    const domain = normalizeDomain(record.domain) || domainFromUrl(sourceUrl);
+    const sourceDomain = /linkedin\.com\/in\//i.test(sourceUrl) ? "" : domainFromUrl(sourceUrl);
+    const domain = normalizeDomain(record.domain) || sourceDomain;
     if (!name) {
       rejected.push({ rowNumber, email: "", reason: "missing_name_for_airscale" });
       return;
     }
-    if (!domain) {
-      rejected.push({ rowNumber, email: name, reason: "missing_company_domain_for_airscale" });
+    if (!domain && !sourceUrl) {
+      rejected.push({ rowNumber, email: name, reason: "missing_company_domain_or_profile_for_airscale" });
       return;
     }
     targets.push({
@@ -717,9 +981,7 @@ async function prepareOutboxContacts(input: {
 }> {
   if (input.sourceMode === "auto") {
     const requested = clampInt(input.maxProspects, 25, 1, 100);
-    const sourced = await sourceOutboxProspects({
-      brandName: input.brandName,
-      brandWebsite: input.brandWebsite,
+    const sourced = await sourceOutboxProspectsFromAirscale({
       targetAudience: input.prospectQuery ?? "",
       offer: input.prospectOffer ?? "",
       maxProspects: requested,

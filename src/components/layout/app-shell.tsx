@@ -98,6 +98,10 @@ function breadcrumb(pathname: string, activeBrandName?: string) {
     normalized.push("Delivery");
     return normalized.join(" / ");
   }
+  if (parts[2] === "outbox") {
+    normalized.push("Outbox");
+    return normalized.join(" / ");
+  }
   if (parts[2] === "leads") {
     normalized.push("Audience");
     return normalized.join(" / ");
@@ -295,7 +299,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         href: brandRoot,
         icon: MessageSquareText,
       },
-      { id: "send", label: "Send", href: hasActiveBrand ? `${brandRoot}/send` : "/brands", icon: Send },
+      { id: "send", label: "Outbox", href: hasActiveBrand ? `${brandRoot}/outbox` : "/brands", icon: Send },
       { id: "inbox", label: "Inbox", href: hasActiveBrand ? `${brandRoot}/inbox` : "/brands", icon: Inbox },
       {
         id: "leads",
@@ -331,7 +335,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const activeMainItem = useMemo(() => {
     if (hasActiveBrand) {
       if (pathname === brandRoot) return "agent";
-      if (pathname === `${brandRoot}/send` || pathname.startsWith(`${brandRoot}/send/`)) return "send";
+      if (
+        pathname === `${brandRoot}/outbox` ||
+        pathname.startsWith(`${brandRoot}/outbox/`) ||
+        pathname === `${brandRoot}/send` ||
+        pathname.startsWith(`${brandRoot}/send/`)
+      ) return "send";
       if (pathname === `${brandRoot}/missions` || pathname.startsWith(`${brandRoot}/missions/`)) return "missions";
       if (pathname === `${brandRoot}/campaigns` || pathname.startsWith(`${brandRoot}/campaigns/`)) return "campaigns";
       if (pathname === `${brandRoot}/experiments` || pathname.startsWith(`${brandRoot}/experiments/`)) return "experiments";

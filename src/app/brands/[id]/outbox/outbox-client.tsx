@@ -23,7 +23,8 @@ import {
 } from "@/lib/client-api";
 import type { BrandRecord } from "@/lib/factory-types";
 
-const sampleContacts = "email,name,company,title\nalex@example.com,Alex Morgan,Example,Founder";
+const sampleFinderTargets = "name,company,domain,title,linkedin\nAlex Morgan,Example Co,example.com,Founder,";
+const sampleContacts = "email,name,company,title\nalex@example.com,Alex Morgan,Example Co,Founder";
 
 function formatCount(value: number) {
   return value.toString().padStart(2, "0");
@@ -63,13 +64,14 @@ function pickSenderAccountId(state: OutboxConsoleState, preferredSenderAccountId
 }
 
 function formatLaunchNotice(result: Awaited<ReturnType<typeof createOutboxBatchApi>>) {
+  const finderPrefix = result.finder ? `Found ${result.finder.found} with Airscale. ` : "";
   if (result.counts.sent > 0) {
-    return `Sent ${result.counts.sent} now. Held ${result.counts.held}. Failed ${result.counts.failed}.`;
+    return `${finderPrefix}Sent ${result.counts.sent} now. Held ${result.counts.held}. Failed ${result.counts.failed}.`;
   }
   if (result.counts.held > 0) {
-    return `Created ${result.counts.created} messages, all held by sender policy.`;
+    return `${finderPrefix}Created ${result.counts.created} messages, all held by sender policy.`;
   }
-  return `Created ${result.counts.created} messages. Failed ${result.counts.failed}.`;
+  return `${finderPrefix}Created ${result.counts.created} messages. Failed ${result.counts.failed}.`;
 }
 
 function optionalNumericInput(value: string) {
@@ -93,6 +95,8 @@ export default function OutboxClient({
   const [notice, setNotice] = useState("");
   const [senderAccountId, setSenderAccountId] = useState("");
   const [batchName, setBatchName] = useState("");
+  const [sourceMode, setSourceMode] = useState<"airscale" | "contacts">("airscale");
+  const [finderText, setFinderText] = useState("");
   const [contactsText, setContactsText] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -164,7 +168,9 @@ export default function OutboxClient({
       const result = await createOutboxBatchApi(brand.id, {
         senderAccountId,
         batchName,
-        contactsText,
+        sourceMode,
+        contactsText: sourceMode === "contacts" ? contactsText : "",
+        finderText: sourceMode === "airscale" ? finderText : "",
         subject,
         body,
         requestedSendNow: optionalNumericInput(requestedSendNow),
@@ -172,6 +178,7 @@ export default function OutboxClient({
       setRejected(result.rejected);
       setNotice(formatLaunchNotice(result));
       setBatchName("");
+      setFinderText("");
       setContactsText("");
       await refresh(senderAccountId);
     } catch (err) {
@@ -185,7 +192,7 @@ export default function OutboxClient({
     <div className="space-y-7">
       <PageIntro
         title="Outbox"
-        description="Policy-capped Customer.io sending with a visible sent, held, failed, and reply ledger."
+        description="Airscale email finding, policy-capped Customer.io sending, and a visible sent, held, failed, and reply ledger."
         actions={
           <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading}>
             <RefreshCw className="h-4 w-4" />
@@ -231,7 +238,7 @@ export default function OutboxClient({
         ) : null}
       </SectionPanel>
 
-      <SectionPanel title="New batch" description="Paste contacts, choose a sender, and send only what policy allows now.">
+      <SectionPanel title="New batch" description="Find emails with Airscale, choose a sender, and send only what policy allows now.">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
           <div className="grid gap-4">
             <div className="grid gap-3 md:grid-cols-3">
@@ -254,12 +261,29 @@ export default function OutboxClient({
                 <Input value={requestedSendNow} onChange={(event) => setRequestedSendNow(event.target.value)} inputMode="numeric" />
               </div>
             </div>
+            <div className="max-w-xs">
+              <Label>Source</Label>
+              <Select
+                value={sourceMode}
+                onChange={(event) => {
+                  setSourceMode(event.target.value === "contacts" ? "contacts" : "airscale");
+                  setError("");
+                  setNotice("");
+                  setRejected([]);
+                }}
+              >
+                <option value="airscale">Find with Airscale</option>
+                <option value="contacts">Paste emails</option>
+              </Select>
+            </div>
             <div>
-              <Label>Contacts</Label>
+              <Label>{sourceMode === "airscale" ? "People to find" : "Contacts"}</Label>
               <Textarea
-                value={contactsText}
-                onChange={(event) => setContactsText(event.target.value)}
-                placeholder={sampleContacts}
+                value={sourceMode === "airscale" ? finderText : contactsText}
+                onChange={(event) =>
+                  sourceMode === "airscale" ? setFinderText(event.target.value) : setContactsText(event.target.value)
+                }
+                placeholder={sourceMode === "airscale" ? sampleFinderTargets : sampleContacts}
                 className="min-h-[180px] font-mono text-xs"
               />
             </div>
@@ -279,7 +303,7 @@ export default function OutboxClient({
                 className="min-w-[9rem]"
               >
                 <Send className="h-4 w-4" />
-                {submitting ? "Sending..." : "Send allowed"}
+                {submitting ? "Sending..." : sourceMode === "airscale" ? "Find + send" : "Send allowed"}
               </Button>
             </div>
           </div>

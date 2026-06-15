@@ -60,6 +60,10 @@ const DEFAULT_HOURLY_CAP = 25;
 const MAX_OUTBOX_BATCH_CONTACTS = 1000;
 const MAX_OUTBOX_AIRSCALE_TARGETS = 200;
 const OUTBOX_RECENT_RECIPIENT_DEDUPE_DAYS = 90;
+const DEFAULT_OUTBOX_AUTOPILOT_COOLDOWN_HOURS = 1;
+const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER = 4;
+const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR = 6;
+const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_CAP = 20;
 
 type OutboxSourceMode = "contacts" | "airscale" | "auto";
 
@@ -292,6 +296,20 @@ function clampInt(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
+}
+
+function outboxAutopilotProspectRequestSize(input: { maxProspects: number; sendNow: number; availableNow: number }) {
+  const capacity = Math.max(0, Math.min(input.sendNow, input.availableNow));
+  if (capacity <= 0) return 0;
+  const desired = Math.min(
+    OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_CAP,
+    Math.max(
+      capacity,
+      capacity * OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER,
+      OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR
+    )
+  );
+  return clampInt(desired, capacity, 1, Math.max(1, input.maxProspects));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -2049,7 +2067,12 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
   const senderAccountId = outboxEnvText("OUTBOX_AUTOPILOT_SENDER_ACCOUNT_ID", 120);
   const maxProspects = outboxEnvNumber("OUTBOX_AUTOPILOT_MAX_PROSPECTS", 50, 1, 100);
   const requestedSendNow = outboxEnvNumber("OUTBOX_AUTOPILOT_REQUESTED_SEND_NOW", 25, 0, 100);
-  const cooldownHours = outboxEnvNumber("OUTBOX_AUTOPILOT_MIN_HOURS_BETWEEN_BATCHES", 24, 1, 168);
+  const cooldownHours = outboxEnvNumber(
+    "OUTBOX_AUTOPILOT_MIN_HOURS_BETWEEN_BATCHES",
+    DEFAULT_OUTBOX_AUTOPILOT_COOLDOWN_HOURS,
+    1,
+    168
+  );
   const timezone = outboxEnvText("OUTBOX_AUTOPILOT_TIMEZONE", 80) || DEFAULT_TIMEZONE;
   const configuredTargetAudience = outboxEnvText("OUTBOX_AUTOPILOT_TARGET_AUDIENCE", 1000);
   const configuredSubject = outboxEnvText("OUTBOX_AUTOPILOT_SUBJECT", 200);
@@ -2165,7 +2188,11 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
       }
 
       const launchSendNow = Math.min(requestedSendNow || 25, policy.availableNow);
-      const launchMaxProspects = Math.max(1, Math.min(maxProspects, launchSendNow || policy.availableNow));
+      const launchMaxProspects = outboxAutopilotProspectRequestSize({
+        maxProspects,
+        sendNow: launchSendNow,
+        availableNow: policy.availableNow,
+      });
       const launch = await launchOutboxBatch({
         brandId: brand.id,
         senderAccountId: selectedSender.accountId,

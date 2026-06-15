@@ -143,6 +143,7 @@ export type OutboxPolicyDecision = {
   dailyCap: number;
   hourlyCap: number;
   sentToday: number;
+  sentThisHour: number;
   failedOrBouncedLast7d: number;
   availableNow: number;
   sendNow: number;
@@ -716,6 +717,12 @@ function startOfUtcDayIso() {
   return date.toISOString();
 }
 
+function startOfUtcHourIso() {
+  const date = new Date();
+  date.setUTCMinutes(0, 0, 0);
+  return date.toISOString();
+}
+
 function daysAgoIso(days: number) {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -1199,14 +1206,20 @@ function metadataMatchesSender(meta: unknown, account: OutreachAccount) {
 async function senderMessageWindowStats(account: OutreachAccount) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
-    return { sentToday: 0, failedOrBouncedLast7d: 0 };
+    return { sentToday: 0, sentThisHour: 0, failedOrBouncedLast7d: 0 };
   }
 
-  const [todayResult, weekResult] = await Promise.all([
+  const [todayResult, hourResult, weekResult] = await Promise.all([
     supabase
       .from("demanddev_outreach_messages")
       .select("status,generation_meta,sent_at,created_at")
       .gte("sent_at", startOfUtcDayIso())
+      .in("status", ["sent", "replied"])
+      .limit(5000),
+    supabase
+      .from("demanddev_outreach_messages")
+      .select("status,generation_meta,sent_at,created_at")
+      .gte("sent_at", startOfUtcHourIso())
       .in("status", ["sent", "replied"])
       .limit(5000),
     supabase
@@ -1218,9 +1231,11 @@ async function senderMessageWindowStats(account: OutreachAccount) {
   ]);
 
   const todayRows = todayResult.error ? [] : todayResult.data ?? [];
+  const hourRows = hourResult.error ? [] : hourResult.data ?? [];
   const weekRows = weekResult.error ? [] : weekResult.data ?? [];
   return {
     sentToday: todayRows.filter((row) => metadataMatchesSender((row as Record<string, unknown>).generation_meta, account)).length,
+    sentThisHour: hourRows.filter((row) => metadataMatchesSender((row as Record<string, unknown>).generation_meta, account)).length,
     failedOrBouncedLast7d: weekRows.filter((row) => metadataMatchesSender((row as Record<string, unknown>).generation_meta, account)).length,
   };
 }
@@ -1271,7 +1286,7 @@ async function policyForSender(input: {
     canonicalSender?.hourlyCap && canonicalSender.hourlyCap > 0
       ? canonicalSender.hourlyCap
       : Math.min(DEFAULT_HOURLY_CAP, dailyCap || DEFAULT_HOURLY_CAP);
-  const availableNow = Math.max(0, Math.min(dailyCap - stats.sentToday, hourlyCap));
+  const availableNow = Math.max(0, Math.min(dailyCap - stats.sentToday, hourlyCap - stats.sentThisHour));
   const requestedContacts = Math.max(0, Math.round(Number(input.requestedContacts ?? 0) || 0));
   const requestedSendNow =
     input.requestedSendNow === undefined
@@ -1287,6 +1302,7 @@ async function policyForSender(input: {
     dailyCap,
     hourlyCap,
     sentToday: stats.sentToday,
+    sentThisHour: stats.sentThisHour,
     failedOrBouncedLast7d: stats.failedOrBouncedLast7d,
     availableNow,
     sendNow,

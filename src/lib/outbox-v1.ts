@@ -59,6 +59,7 @@ const DEFAULT_HEALTHY_DAILY_CAP = 100;
 const DEFAULT_HOURLY_CAP = 25;
 const MAX_OUTBOX_BATCH_CONTACTS = 1000;
 const MAX_OUTBOX_AIRSCALE_TARGETS = 200;
+const OUTBOX_RECENT_RECIPIENT_DEDUPE_DAYS = 90;
 
 type OutboxSourceMode = "contacts" | "airscale" | "auto";
 
@@ -1046,6 +1047,59 @@ async function prepareOutboxContacts(input: {
   };
 }
 
+async function filterRecentOutboxRecipients(input: {
+  brandId: string;
+  contacts: OutboxPreparedContact[];
+}): Promise<{
+  accepted: OutboxPreparedContact[];
+  rejected: ManualBatchRejectedContact[];
+}> {
+  const accepted: OutboxPreparedContact[] = [];
+  const rejected: ManualBatchRejectedContact[] = [];
+  const seenInBatch = new Set<string>();
+  const emails = input.contacts
+    .map((contact) => contact.email.trim().toLowerCase())
+    .filter(Boolean);
+  const recentEmails = new Set<string>();
+  const supabase = getSupabaseAdmin();
+  if (supabase && emails.length > 0) {
+    const { data, error } = await supabase
+      .from("demanddev_outreach_messages")
+      .select("to_email,status,created_at,sent_at")
+      .eq("brand_id", input.brandId)
+      .in("to_email", Array.from(new Set(emails)))
+      .in("status", ["scheduled", "sent", "replied"])
+      .gte("created_at", daysAgoIso(OUTBOX_RECENT_RECIPIENT_DEDUPE_DAYS))
+      .limit(5000);
+    if (!error) {
+      for (const row of data ?? []) {
+        const email = String((row as Record<string, unknown>).to_email ?? "").trim().toLowerCase();
+        if (email) recentEmails.add(email);
+      }
+    }
+  }
+
+  input.contacts.forEach((contact, index) => {
+    const email = contact.email.trim().toLowerCase();
+    if (!email) {
+      rejected.push({ rowNumber: index + 1, email: "", reason: "missing_email" });
+      return;
+    }
+    if (seenInBatch.has(email)) {
+      rejected.push({ rowNumber: index + 1, email: contact.email, reason: "duplicate_in_current_outbox_batch" });
+      return;
+    }
+    seenInBatch.add(email);
+    if (recentEmails.has(email)) {
+      rejected.push({ rowNumber: index + 1, email: contact.email, reason: "duplicate_recent_outbox_recipient" });
+      return;
+    }
+    accepted.push(contact);
+  });
+
+  return { accepted, rejected };
+}
+
 function isOutboxRunExternalRef(value: string | null | undefined) {
   return String(value ?? "").trim().startsWith(OUTBOX_V1_EXTERNAL_REF_PREFIX);
 }
@@ -1413,7 +1467,20 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     );
   }
 
-  const accepted = prepared.accepted.slice(0, MAX_OUTBOX_BATCH_CONTACTS);
+  const deduped = await filterRecentOutboxRecipients({
+    brandId: input.brandId,
+    contacts: prepared.accepted,
+  });
+  const allRejected = [...prepared.rejected, ...deduped.rejected];
+  if (!deduped.accepted.length) {
+    throw new Error(
+      allRejected.length
+        ? `No sendable contacts after dedupe. First rejection: ${allRejected[0]?.reason}`
+        : "No sendable contacts after dedupe."
+    );
+  }
+
+  const accepted = deduped.accepted.slice(0, MAX_OUTBOX_BATCH_CONTACTS);
   const requestedSendNow = clampInt(input.requestedSendNow, accepted.length, 0, MAX_OUTBOX_BATCH_CONTACTS);
   const policy = await policyForSender({
     brandId: input.brandId,
@@ -1551,7 +1618,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
       prospectSourcing: prepared.prospectSourcing,
       finder: prepared.finder,
       acceptedContacts: accepted.length,
-      rejectedContacts: prepared.rejected.length,
+      rejectedContacts: allRejected.length,
       senderAccountId: account.id,
       fromEmail: getOutreachAccountFromEmail(account).trim(),
       replyToEmail: reply.replyToEmail,
@@ -1639,7 +1706,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     run,
     campaign,
     accepted,
-    rejected: prepared.rejected,
+    rejected: allRejected,
     policy,
     messages: refreshed.messages,
     finder: prepared.finder,
@@ -1651,7 +1718,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
       sent,
       failed,
       held: Math.max(0, messages.length - sent - failed),
-      rejected: prepared.rejected.length,
+      rejected: allRejected.length,
     },
   };
 }

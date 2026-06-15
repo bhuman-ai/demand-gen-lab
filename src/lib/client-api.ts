@@ -53,6 +53,11 @@ import type {
   ManualBatchSummary,
 } from "@/lib/manual-batch-outreach";
 import type {
+  OutboxBatchSummary,
+  OutboxPolicyDecision,
+  OutboxSenderOption,
+} from "@/lib/outbox-v1";
+import type {
   OperatorAction,
   OperatorActivitySummary,
   OperatorAttentionRequest,
@@ -936,6 +941,65 @@ export async function createManualBatchApi(
     rejected: (Array.isArray(data.rejected) ? data.rejected : []) as ManualBatchRejectedContact[],
     messages: (Array.isArray(data.messages) ? data.messages : []) as OutreachMessage[],
     dispatch: data.dispatch as ManualBatchImmediateDispatchResult,
+  };
+}
+
+export type OutboxConsoleState = {
+  batches: OutboxBatchSummary[];
+  senders: OutboxSenderOption[];
+  selectedPolicy: OutboxPolicyDecision | null;
+  outboundSendingEnabled: boolean;
+  maxBatchContacts: number;
+};
+
+export async function fetchOutboxConsole(
+  brandId: string,
+  options: { senderAccountId?: string } = {}
+): Promise<OutboxConsoleState> {
+  const query = options.senderAccountId ? `?sender=${encodeURIComponent(options.senderAccountId)}` : "";
+  const response = await fetch(`/api/brands/${brandId}/outbox${query}`, { cache: "no-store" });
+  const data = await readJson(response);
+  return {
+    batches: (Array.isArray(data.batches) ? data.batches : []) as OutboxBatchSummary[],
+    senders: (Array.isArray(data.senders) ? data.senders : []) as OutboxSenderOption[],
+    selectedPolicy: data.selectedPolicy ? (data.selectedPolicy as OutboxPolicyDecision) : null,
+    outboundSendingEnabled: data.outboundSendingEnabled === true,
+    maxBatchContacts: Number(data.maxBatchContacts ?? 0) || 0,
+  };
+}
+
+export async function createOutboxBatchApi(
+  brandId: string,
+  input: {
+    senderAccountId: string;
+    batchName?: string;
+    contactsText: string;
+    subject: string;
+    body: string;
+    requestedSendNow?: number;
+  }
+) {
+  const response = await fetch(`/api/brands/${brandId}/outbox`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await readJson(response);
+  return {
+    batchId: String(data.batchId ?? ""),
+    run: data.run as OutreachRun,
+    campaign: data.campaign as ScaleCampaignRecord,
+    accepted: (Array.isArray(data.accepted) ? data.accepted : []) as Array<{ email: string }>,
+    rejected: (Array.isArray(data.rejected) ? data.rejected : []) as ManualBatchRejectedContact[],
+    policy: data.policy as OutboxPolicyDecision,
+    messages: (Array.isArray(data.messages) ? data.messages : []) as OutreachMessage[],
+    counts: asObject(data.counts) as {
+      created: number;
+      sent: number;
+      failed: number;
+      held: number;
+      rejected: number;
+    },
   };
 }
 

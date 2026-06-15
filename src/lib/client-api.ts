@@ -973,7 +973,9 @@ export async function createOutboxBatchApi(
   input: {
     senderAccountId: string;
     batchName?: string;
+    sourceMode?: "contacts" | "airscale";
     contactsText: string;
+    finderText?: string;
     subject: string;
     body: string;
     requestedSendNow?: number;
@@ -992,9 +994,21 @@ export async function createOutboxBatchApi(
     accepted: (Array.isArray(data.accepted) ? data.accepted : []) as Array<{ email: string }>,
     rejected: (Array.isArray(data.rejected) ? data.rejected : []) as ManualBatchRejectedContact[],
     policy: data.policy as OutboxPolicyDecision,
+    finder: data.finder as
+      | {
+          provider: "airscale";
+          requested: number;
+          processed: number;
+          found: number;
+          rejected: number;
+          creditsUsed: number;
+          truncated: boolean;
+        }
+      | null,
     messages: (Array.isArray(data.messages) ? data.messages : []) as OutreachMessage[],
     counts: asObject(data.counts) as {
       created: number;
+      found: number;
       sent: number;
       failed: number;
       held: number;

@@ -43,6 +43,8 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
       senderAccountId: String(body.senderAccountId ?? "").trim(),
       batchName: String(body.batchName ?? "").trim(),
       contactsText: String(body.contactsText ?? "").trim(),
+      finderText: String(body.finderText ?? "").trim(),
+      sourceMode: String(body.sourceMode ?? "").trim() === "airscale" ? "airscale" : "contacts",
       subject: String(body.subject ?? "").trim(),
       body: String(body.body ?? "").trim(),
       requestedSendNow: optionalNumber(body.requestedSendNow),

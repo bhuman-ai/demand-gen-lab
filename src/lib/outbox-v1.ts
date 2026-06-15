@@ -35,13 +35,18 @@ import {
   getOutreachAccountReplyToEmail,
   supportsCustomerIoDelivery,
 } from "@/lib/outreach-account-helpers";
-import { sendOutreachMessage } from "@/lib/outreach-providers";
 import { getCanonicalSenderPoolForBrand } from "@/lib/senders";
+import { buildEmailFinderBatchResponse } from "@/lib/internal-email-finder";
 import {
   parseManualBatchContacts,
   type ManualBatchAcceptedContact,
   type ManualBatchRejectedContact,
 } from "@/lib/manual-batch-outreach";
+import {
+  extractFirstEmailAddress,
+  getLeadEmailSuppressionReason,
+  sendOutreachMessage,
+} from "@/lib/outreach-providers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const OUTBOX_V1_EXTERNAL_REF_PREFIX = "outbox_v1:";
@@ -52,6 +57,35 @@ const DEFAULT_WARMING_DAILY_CAP = 25;
 const DEFAULT_HEALTHY_DAILY_CAP = 100;
 const DEFAULT_HOURLY_CAP = 25;
 const MAX_OUTBOX_BATCH_CONTACTS = 1000;
+const MAX_OUTBOX_AIRSCALE_TARGETS = 200;
+
+type OutboxSourceMode = "contacts" | "airscale";
+
+type OutboxFinderTarget = {
+  rowNumber: number;
+  name: string;
+  company: string;
+  title: string;
+  domain: string;
+  sourceUrl: string;
+};
+
+type OutboxPreparedContact = ManualBatchAcceptedContact & {
+  sourceMode: OutboxSourceMode;
+  realVerifiedEmail: boolean;
+  emailVerification: EmailVerificationState;
+  finderMeta: Record<string, unknown> | null;
+};
+
+type OutboxFinderSummary = {
+  provider: "airscale";
+  requested: number;
+  processed: number;
+  found: number;
+  rejected: number;
+  creditsUsed: number;
+  truncated: boolean;
+};
 
 export type OutboxSenderOption = {
   accountId: string;
@@ -114,6 +148,8 @@ export type OutboxLaunchInput = {
   senderAccountId?: string;
   batchName?: string;
   contactsText?: string;
+  finderText?: string;
+  sourceMode?: OutboxSourceMode;
   subject: string;
   body: string;
   requestedSendNow?: number;
@@ -128,8 +164,10 @@ export type OutboxLaunchResult = {
   rejected: ManualBatchRejectedContact[];
   policy: OutboxPolicyDecision;
   messages: OutreachMessage[];
+  finder: OutboxFinderSummary | null;
   counts: {
     created: number;
+    found: number;
     sent: number;
     failed: number;
     held: number;
@@ -155,6 +193,148 @@ function clampInt(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeDomain(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "")
+    .replace(/[^a-z0-9.-]/g, "")
+    .replace(/^\.+|\.+$/g, "");
+}
+
+function domainFromUrl(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    return host.includes(".") ? normalizeDomain(host) : "";
+  } catch {
+    return normalizeDomain(raw);
+  }
+}
+
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (char === "," && !quoted) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function finderHeaderFieldName(value: string) {
+  const key = value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (["name", "fullname", "person", "contact", "contactname"].includes(key)) return "name";
+  if (["firstname", "first"].includes(key)) return "firstName";
+  if (["lastname", "last", "surname"].includes(key)) return "lastName";
+  if (["company", "companyname", "account", "organization", "org"].includes(key)) return "company";
+  if (["title", "jobtitle", "role"].includes(key)) return "title";
+  if (["domain", "companydomain", "website", "url"].includes(key)) return "domain";
+  if (["source", "sourceurl", "profile", "profileurl", "linkedin", "linkedinurl", "linkedinprofile"].includes(key)) {
+    return "sourceUrl";
+  }
+  return "";
+}
+
+function normalizeOutboxSourceMode(input: OutboxLaunchInput): OutboxSourceMode {
+  const explicit = String(input.sourceMode ?? "").trim().toLowerCase();
+  if (explicit === "airscale" || explicit === "finder" || explicit === "find") return "airscale";
+  if (explicit === "contacts" || explicit === "manual" || explicit === "paste") return "contacts";
+  return String(input.finderText ?? "").trim() ? "airscale" : "contacts";
+}
+
+function parseOutboxFinderTargets(text: string): {
+  targets: OutboxFinderTarget[];
+  rejected: ManualBatchRejectedContact[];
+  truncated: boolean;
+} {
+  const lines = String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return { targets: [], rejected: [], truncated: false };
+
+  const firstCells = parseCsvLine(lines[0] ?? "");
+  const headerNames = firstCells.map(finderHeaderFieldName);
+  const hasHeader = headerNames.some(Boolean) && firstCells.some((cell) => !cell.includes("."));
+  const rows = hasHeader ? lines.slice(1) : lines;
+  const targets: OutboxFinderTarget[] = [];
+  const rejected: ManualBatchRejectedContact[] = [];
+  const truncated = rows.length > MAX_OUTBOX_AIRSCALE_TARGETS;
+
+  rows.forEach((line, index) => {
+    const rowNumber = index + 1;
+    if (index >= MAX_OUTBOX_AIRSCALE_TARGETS) {
+      rejected.push({ rowNumber, email: "", reason: "airscale_batch_limit_200" });
+      return;
+    }
+    const cells = parseCsvLine(line);
+    const record: Record<string, string> = {};
+    if (hasHeader) {
+      headerNames.forEach((name, cellIndex) => {
+        if (!name) return;
+        record[name] = cells[cellIndex] ?? "";
+      });
+    } else {
+      record.name = cells[0] ?? "";
+      record.company = cells[1] ?? "";
+      record.domain = cells[2] ?? "";
+      record.title = cells[3] ?? "";
+      record.sourceUrl = cells[4] ?? "";
+    }
+
+    const name = compactText(record.name || [record.firstName, record.lastName].filter(Boolean).join(" "), 120);
+    const sourceUrl = String(record.sourceUrl ?? "").trim();
+    const domain = normalizeDomain(record.domain) || domainFromUrl(sourceUrl);
+    if (!name) {
+      rejected.push({ rowNumber, email: "", reason: "missing_name_for_airscale" });
+      return;
+    }
+    if (!domain) {
+      rejected.push({ rowNumber, email: name, reason: "missing_company_domain_for_airscale" });
+      return;
+    }
+    targets.push({
+      rowNumber,
+      name,
+      company: compactText(record.company, 120),
+      title: compactText(record.title, 160),
+      domain,
+      sourceUrl,
+    });
+  });
+
+  return { targets, rejected, truncated };
 }
 
 function startOfUtcDayIso() {
@@ -189,6 +369,258 @@ function outboxEmailVerification(): EmailVerificationState {
     mxStatus: "unknown",
     acceptAll: null,
     catchAll: null,
+  };
+}
+
+function nullableBool(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+  return null;
+}
+
+function emailVerificationFromFinderResult(input: {
+  result: Record<string, unknown>;
+  bestGuess: Record<string, unknown>;
+  bestAttempt: Record<string, unknown>;
+}): EmailVerificationState {
+  const verification = asRecord(input.result.verification);
+  const details = asRecord(input.bestAttempt.details);
+  const rawMode = String(verification.mode ?? "").trim().toLowerCase();
+  const mode: EmailVerificationState["mode"] =
+    rawMode === "local" || rawMode === "validatedmails" || rawMode === "heuristic" ? rawMode : "local";
+  const provider = String(details.provider ?? details.external_provider ?? verification.provider ?? "airscale").trim();
+  const verdict = String(input.bestGuess.verdict ?? input.bestAttempt.verdict ?? "").trim();
+  const confidence = String(input.bestGuess.confidence ?? input.bestAttempt.confidence ?? "").trim();
+  const acceptAll = nullableBool(details.accept_all ?? details.acceptAll);
+  const catchAll = nullableBool(details.catch_all ?? details.catchAll);
+  const pValid = Number(input.bestGuess.p_valid ?? input.bestAttempt.p_valid);
+  const httpStatus = Number(details.http_status ?? details.external_provider_http_status);
+  return {
+    mode,
+    provider,
+    verdict,
+    confidence,
+    reason: String(details.reason ?? details.external_provider_reason ?? "").trim(),
+    mxStatus: String(details.mx_status ?? verification.mx_status ?? "").trim(),
+    acceptAll,
+    catchAll,
+    pValid: Number.isFinite(pValid) ? pValid : null,
+    httpStatus: Number.isFinite(httpStatus) ? httpStatus : null,
+    providerStatus: String(details.provider_status ?? details.external_provider_status ?? "").trim(),
+  };
+}
+
+function isSafeFinderVerification(state: EmailVerificationState) {
+  const verdict = String(state.verdict ?? "").trim().toLowerCase();
+  const confidence = String(state.confidence ?? "").trim().toLowerCase();
+  return (
+    state.mode !== "heuristic" &&
+    ["likely-valid", "valid", "accepted", "deliverable"].includes(verdict) &&
+    confidence === "high" &&
+    state.acceptAll !== true &&
+    state.catchAll !== true
+  );
+}
+
+function finderRejectReason(result: Record<string, unknown>, fallback: string) {
+  const verification = asRecord(result.verification);
+  const attempts = asArray(verification.external_provider_attempts).map(asRecord);
+  const lastExternal = attempts[attempts.length - 1] ?? {};
+  return (
+    String(lastExternal.reason ?? "").trim() ||
+    String(lastExternal.status ?? "").trim() ||
+    String(asRecord(result.best_guess).route ?? "").trim() ||
+    fallback
+  );
+}
+
+async function prepareAirscaleOutboxContacts(input: {
+  brandId: string;
+  senderAccountId: string;
+  batchName: string;
+  finderText: string;
+}): Promise<{
+  accepted: OutboxPreparedContact[];
+  rejected: ManualBatchRejectedContact[];
+  finder: OutboxFinderSummary;
+}> {
+  const parsedTargets = parseOutboxFinderTargets(input.finderText);
+  if (!parsedTargets.targets.length) {
+    return {
+      accepted: [],
+      rejected: parsedTargets.rejected,
+      finder: {
+        provider: "airscale",
+        requested: 0,
+        processed: 0,
+        found: 0,
+        rejected: parsedTargets.rejected.length,
+        creditsUsed: 0,
+        truncated: parsedTargets.truncated,
+      },
+    };
+  }
+
+  const response = asRecord(
+    await buildEmailFinderBatchResponse({
+      request_id: `outbox-airscale-${Date.now()}`,
+      audit_source: "outbox_v1_airscale",
+      audit_context: {
+        brandId: input.brandId,
+        senderAccountId: input.senderAccountId,
+        batchName: input.batchName,
+      },
+      default_item: {
+        verification_mode: "local",
+        external_provider_fallback: true,
+        external_providers: ["airscale"],
+        max_credits: 1,
+        timeout_seconds: 12,
+        probe_timeout_seconds: 12,
+        stop_on_first_hit: true,
+        stop_on_min_confidence: "high",
+        local_fallback_on_risky: true,
+        max_candidates: 12,
+      },
+      items: parsedTargets.targets.map((target) => ({
+        id: `row-${target.rowNumber}`,
+        name: target.name,
+        company_name: target.company,
+        domain: target.domain,
+        linkedin_url: target.sourceUrl,
+        source_url: target.sourceUrl,
+      })),
+      concurrency: 3,
+      continue_on_error: true,
+    })
+  );
+  const resultRows = asArray(response.results).map(asRecord);
+  const resolvedContacts: Array<{
+    email: string;
+    name: string;
+    company: string;
+    title: string;
+    domain: string;
+    sourceUrl: string;
+    verification: EmailVerificationState;
+    realVerifiedEmail: boolean;
+    finderMeta: Record<string, unknown>;
+  }> = [];
+  const rejected: ManualBatchRejectedContact[] = [...parsedTargets.rejected];
+  let creditsUsed = 0;
+
+  for (const row of resultRows) {
+    const target = parsedTargets.targets[Number(row.index ?? 0)] ?? null;
+    if (!target) continue;
+    if (row.ok !== true) {
+      rejected.push({ rowNumber: target.rowNumber, email: target.name, reason: String(row.error ?? "airscale_lookup_failed") });
+      continue;
+    }
+    const result = asRecord(row.result);
+    const verification = asRecord(result.verification);
+    creditsUsed += Math.max(0, Number(verification.credits_used ?? 0) || 0);
+    const bestGuess = asRecord(result.best_guess);
+    const email = extractFirstEmailAddress(bestGuess.email);
+    if (!email) {
+      rejected.push({ rowNumber: target.rowNumber, email: target.name, reason: finderRejectReason(result, "airscale_no_high_confidence_email") });
+      continue;
+    }
+    const suppressionReason = getLeadEmailSuppressionReason(email);
+    if (suppressionReason) {
+      rejected.push({ rowNumber: target.rowNumber, email, reason: suppressionReason });
+      continue;
+    }
+    const attempts = asArray(result.attempts).map(asRecord);
+    const bestAttempt =
+      attempts.find((attempt) => extractFirstEmailAddress(attempt.email) === email) ??
+      attempts.find((attempt) => Number(attempt.attempt ?? 0) === Number(bestGuess.attempt ?? 0)) ??
+      {};
+    const emailVerification = emailVerificationFromFinderResult({ result, bestGuess, bestAttempt });
+    if (!isSafeFinderVerification(emailVerification)) {
+      rejected.push({ rowNumber: target.rowNumber, email, reason: "airscale_email_not_safe_to_send" });
+      continue;
+    }
+    resolvedContacts.push({
+      email,
+      name: target.name,
+      company: target.company,
+      title: target.title,
+      domain: target.domain,
+      sourceUrl: target.sourceUrl,
+      verification: emailVerification,
+      realVerifiedEmail: true,
+      finderMeta: {
+        provider: "airscale",
+        bestGuess,
+        externalProviderAttempts: asArray(verification.external_provider_attempts),
+        creditsUsed: Math.max(0, Number(verification.credits_used ?? 0) || 0),
+      },
+    });
+  }
+
+  const parsedContacts = parseManualBatchContacts({ contacts: resolvedContacts });
+  const verificationByEmail = new Map(resolvedContacts.map((contact) => [contact.email.toLowerCase(), contact] as const));
+  const accepted = parsedContacts.accepted.map((contact) => {
+    const found = verificationByEmail.get(contact.email.toLowerCase());
+    return {
+      ...contact,
+      sourceMode: "airscale" as const,
+      realVerifiedEmail: found?.realVerifiedEmail === true,
+      emailVerification: found?.verification ?? outboxEmailVerification(),
+      finderMeta: found?.finderMeta ?? null,
+    };
+  });
+  const allRejected = [...rejected, ...parsedContacts.rejected];
+  return {
+    accepted,
+    rejected: allRejected,
+    finder: {
+      provider: "airscale",
+      requested: parsedTargets.targets.length,
+      processed: resultRows.length,
+      found: accepted.length,
+      rejected: allRejected.length,
+      creditsUsed,
+      truncated: parsedTargets.truncated || response.truncated === true,
+    },
+  };
+}
+
+async function prepareOutboxContacts(input: {
+  brandId: string;
+  senderAccountId: string;
+  batchName: string;
+  sourceMode: OutboxSourceMode;
+  contactsText?: string;
+  finderText?: string;
+}): Promise<{
+  accepted: OutboxPreparedContact[];
+  rejected: ManualBatchRejectedContact[];
+  finder: OutboxFinderSummary | null;
+}> {
+  if (input.sourceMode === "airscale") {
+    return prepareAirscaleOutboxContacts({
+      brandId: input.brandId,
+      senderAccountId: input.senderAccountId,
+      batchName: input.batchName,
+      finderText: input.finderText ?? "",
+    });
+  }
+
+  const parsed = parseManualBatchContacts({ contactsText: input.contactsText });
+  return {
+    accepted: parsed.accepted.map((contact) => ({
+      ...contact,
+      sourceMode: "contacts" as const,
+      realVerifiedEmail: false,
+      emailVerification: outboxEmailVerification(),
+      finderMeta: null,
+    })),
+    rejected: parsed.rejected,
+    finder: null,
   };
 }
 
@@ -518,11 +950,9 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
   const body = String(input.body ?? "").trim();
   if (!subject) throw new Error("Subject is required.");
   if (!body) throw new Error("Body is required.");
-
-  const parsed = parseManualBatchContacts({ contactsText: input.contactsText });
-  if (!parsed.accepted.length) {
-    throw new Error(parsed.rejected.length ? `No sendable contacts. First rejection: ${parsed.rejected[0]?.reason}` : "Contacts are required.");
-  }
+  const sourceMode = normalizeOutboxSourceMode(input);
+  const batchId = `ob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const batchName = compactText(input.batchName, 120) || `Outbox ${new Date().toLocaleDateString("en-US")}`;
 
   const senderAccountId = String(input.senderAccountId ?? "").trim() ||
     String((await getBrandOutreachAssignment(input.brandId).catch(() => null))?.accountId ?? "").trim();
@@ -536,7 +966,25 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
   const reply = await resolveReplyToEmail({ brandId: input.brandId, account });
   if (!reply.replyToEmail) throw new Error("Reply-To email missing for this sender.");
 
-  const accepted = parsed.accepted.slice(0, MAX_OUTBOX_BATCH_CONTACTS);
+  const prepared = await prepareOutboxContacts({
+    brandId: input.brandId,
+    senderAccountId,
+    batchName,
+    sourceMode,
+    contactsText: input.contactsText,
+    finderText: input.finderText,
+  });
+  if (!prepared.accepted.length) {
+    throw new Error(
+      prepared.rejected.length
+        ? `No sendable contacts. First rejection: ${prepared.rejected[0]?.reason}`
+        : sourceMode === "airscale"
+          ? "Airscale targets are required."
+          : "Contacts are required."
+    );
+  }
+
+  const accepted = prepared.accepted.slice(0, MAX_OUTBOX_BATCH_CONTACTS);
   const requestedSendNow = clampInt(input.requestedSendNow, accepted.length, 0, MAX_OUTBOX_BATCH_CONTACTS);
   const policy = await policyForSender({
     brandId: input.brandId,
@@ -544,8 +992,6 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     requestedContacts: accepted.length,
     requestedSendNow,
   });
-  const batchId = `ob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const batchName = compactText(input.batchName, 120) || `Outbox ${new Date().toLocaleDateString("en-US")}`;
   const timezone = String(input.timezone ?? DEFAULT_TIMEZONE).trim() || DEFAULT_TIMEZONE;
   const dailyCap = Math.max(1, policy.dailyCap || DEFAULT_WARMING_DAILY_CAP);
   const hourlyCap = Math.max(1, policy.hourlyCap || Math.min(DEFAULT_HOURLY_CAP, dailyCap));
@@ -554,7 +1000,10 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     brandId: input.brandId,
     name: batchName,
     offer: subject,
-    audience: `${accepted.length} operator-supplied outbox contacts`,
+    audience:
+      sourceMode === "airscale"
+        ? `${accepted.length} Airscale-resolved outbox contacts`
+        : `${accepted.length} operator-supplied outbox contacts`,
     createRuntime: true,
   });
   const updatedExperiment = await updateExperimentRecord(input.brandId, experiment.id, {
@@ -618,9 +1067,9 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
       company: contact.company,
       title: contact.title,
       domain: contact.domain,
-      sourceUrl: `${OUTBOX_V1_SOURCE_PREFIX}${batchId}:${index + 1}`,
-      realVerifiedEmail: false,
-      emailVerification: outboxEmailVerification(),
+      sourceUrl: `${OUTBOX_V1_SOURCE_PREFIX}${batchId}:${contact.sourceMode}:${index + 1}`,
+      realVerifiedEmail: contact.realVerifiedEmail,
+      emailVerification: contact.emailVerification,
     }))
   );
   const leadByEmail = new Map(leads.map((lead) => [lead.email.toLowerCase(), lead] as const));
@@ -645,10 +1094,12 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
         generationMeta: {
           outboxV1: true,
           batchId,
+          sourceMode: contact.sourceMode,
           selectedForImmediateSend,
           holdReason: selectedForImmediateSend ? "" : "sender_policy_cap",
           originalSourceUrl: contact.originalSourceUrl,
           warnings: contact.warnings,
+          finder: contact.finderMeta,
           senderAccountId: account.id,
           senderAccountName: account.name,
           senderFromEmail: getOutreachAccountFromEmail(account).trim(),
@@ -665,8 +1116,10 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     payload: {
       batchId,
       batchName,
+      sourceMode,
+      finder: prepared.finder,
       acceptedContacts: accepted.length,
-      rejectedContacts: parsed.rejected.length,
+      rejectedContacts: prepared.rejected.length,
       senderAccountId: account.id,
       fromEmail: getOutreachAccountFromEmail(account).trim(),
       replyToEmail: reply.replyToEmail,
@@ -754,15 +1207,17 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     run,
     campaign,
     accepted,
-    rejected: parsed.rejected,
+    rejected: prepared.rejected,
     policy,
     messages: refreshed.messages,
+    finder: prepared.finder,
     counts: {
       created: messages.length,
+      found: accepted.length,
       sent,
       failed,
       held: Math.max(0, messages.length - sent - failed),
-      rejected: parsed.rejected.length,
+      rejected: prepared.rejected.length,
     },
   };
 }

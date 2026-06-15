@@ -1,4 +1,4 @@
-import { getBrandById } from "@/lib/factory-data";
+import { getBrandById, listBrands } from "@/lib/factory-data";
 import {
   createExperimentRecord,
   createScaleCampaignRecordFromExperiment,
@@ -7,6 +7,7 @@ import {
 } from "@/lib/experiment-data";
 import type {
   EmailVerificationState,
+  BrandRecord,
   OutreachAccount,
   OutreachMessage,
   OutreachRun,
@@ -47,6 +48,10 @@ import {
   getLeadEmailSuppressionReason,
   sendOutreachMessage,
 } from "@/lib/outreach-providers";
+import {
+  sourceOutboxProspects,
+  type OutboxProspectSourcingResult,
+} from "@/lib/outreach-runtime";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const OUTBOX_V1_EXTERNAL_REF_PREFIX = "outbox_v1:";
@@ -59,7 +64,7 @@ const DEFAULT_HOURLY_CAP = 25;
 const MAX_OUTBOX_BATCH_CONTACTS = 1000;
 const MAX_OUTBOX_AIRSCALE_TARGETS = 200;
 
-type OutboxSourceMode = "contacts" | "airscale";
+type OutboxSourceMode = "contacts" | "airscale" | "auto";
 
 type OutboxFinderTarget = {
   rowNumber: number;
@@ -85,6 +90,23 @@ type OutboxFinderSummary = {
   rejected: number;
   creditsUsed: number;
   truncated: boolean;
+};
+
+type OutboxProspectSourcingSummary = {
+  provider: "exa";
+  requested: number;
+  sourced: number;
+  rejected: number;
+  diagnosticsCount: number;
+  budgetUsedUsd: number;
+  exaSpendUsd: number;
+  dataForSeoSpendUsd: number;
+  sample: Array<{
+    name: string;
+    company: string;
+    title: string;
+    domain: string;
+  }>;
 };
 
 export type OutboxSenderOption = {
@@ -150,6 +172,9 @@ export type OutboxLaunchInput = {
   contactsText?: string;
   finderText?: string;
   sourceMode?: OutboxSourceMode;
+  prospectQuery?: string;
+  prospectOffer?: string;
+  maxProspects?: number;
   subject: string;
   body: string;
   requestedSendNow?: number;
@@ -165,14 +190,55 @@ export type OutboxLaunchResult = {
   policy: OutboxPolicyDecision;
   messages: OutreachMessage[];
   finder: OutboxFinderSummary | null;
+  prospectSourcing: OutboxProspectSourcingSummary | null;
   counts: {
     created: number;
+    sourced: number;
     found: number;
     sent: number;
     failed: number;
     held: number;
     rejected: number;
   };
+};
+
+export type OutboxHeldSendResult = {
+  brandId: string;
+  senderAccountId: string;
+  runsEvaluated: number;
+  messagesEvaluated: number;
+  sent: number;
+  failed: number;
+  held: number;
+  skipped: boolean;
+  reason: string;
+};
+
+export type OutboxAutopilotBrandResult = {
+  brandId: string;
+  brandName: string;
+  action: "launch" | "release_held" | "skip" | "error";
+  reason: string;
+  senderAccountId: string;
+  sent: number;
+  held: number;
+  failed: number;
+  sourced: number;
+  found: number;
+  batchId: string;
+  cooldownHours: number;
+};
+
+export type OutboxAutopilotTickResult = {
+  enabled: boolean;
+  brandsConfigured: number;
+  brandsProcessed: number;
+  launched: number;
+  releasedHeld: number;
+  sent: number;
+  held: number;
+  failed: number;
+  results: OutboxAutopilotBrandResult[];
 };
 
 function nowIso() {
@@ -268,9 +334,51 @@ function finderHeaderFieldName(value: string) {
 
 function normalizeOutboxSourceMode(input: OutboxLaunchInput): OutboxSourceMode {
   const explicit = String(input.sourceMode ?? "").trim().toLowerCase();
+  if (explicit === "auto" || explicit === "prospects" || explicit === "source" || explicit === "sourcing") return "auto";
   if (explicit === "airscale" || explicit === "finder" || explicit === "find") return "airscale";
   if (explicit === "contacts" || explicit === "manual" || explicit === "paste") return "contacts";
+  if (String(input.prospectQuery ?? "").trim()) return "auto";
   return String(input.finderText ?? "").trim() ? "airscale" : "contacts";
+}
+
+function csvCell(value: unknown) {
+  const raw = String(value ?? "").replace(/\r|\n/g, " ").trim();
+  return /[",]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+}
+
+function finderTextFromSourcedProspects(sourced: OutboxProspectSourcingResult) {
+  const rows = sourced.prospects.map((prospect) =>
+    [
+      prospect.name,
+      prospect.company,
+      prospect.domain,
+      prospect.title,
+      prospect.sourceUrl,
+    ].map(csvCell).join(",")
+  );
+  return ["name,company,domain,title,linkedin", ...rows].join("\n");
+}
+
+function prospectSourcingSummary(
+  sourced: OutboxProspectSourcingResult,
+  requested: number
+): OutboxProspectSourcingSummary {
+  return {
+    provider: "exa",
+    requested,
+    sourced: sourced.prospects.length,
+    rejected: sourced.rejectedCount,
+    diagnosticsCount: sourced.diagnostics.length,
+    budgetUsedUsd: sourced.budgetUsedUsd,
+    exaSpendUsd: sourced.exaSpendUsd,
+    dataForSeoSpendUsd: sourced.dataForSeoSpendUsd,
+    sample: sourced.prospects.slice(0, 5).map((prospect) => ({
+      name: prospect.name,
+      company: prospect.company,
+      title: prospect.title,
+      domain: prospect.domain,
+    })),
+  };
 }
 
 function parseOutboxFinderTargets(text: string): {
@@ -591,23 +699,74 @@ async function prepareAirscaleOutboxContacts(input: {
 
 async function prepareOutboxContacts(input: {
   brandId: string;
+  brandName: string;
+  brandWebsite: string;
   senderAccountId: string;
   batchName: string;
   sourceMode: OutboxSourceMode;
   contactsText?: string;
   finderText?: string;
+  prospectQuery?: string;
+  prospectOffer?: string;
+  maxProspects?: number;
 }): Promise<{
   accepted: OutboxPreparedContact[];
   rejected: ManualBatchRejectedContact[];
   finder: OutboxFinderSummary | null;
+  prospectSourcing: OutboxProspectSourcingSummary | null;
 }> {
+  if (input.sourceMode === "auto") {
+    const requested = clampInt(input.maxProspects, 25, 1, 100);
+    const sourced = await sourceOutboxProspects({
+      brandName: input.brandName,
+      brandWebsite: input.brandWebsite,
+      targetAudience: input.prospectQuery ?? "",
+      offer: input.prospectOffer ?? "",
+      maxProspects: requested,
+    });
+    if (!sourced.prospects.length) {
+      return {
+        accepted: [],
+        rejected: [{ rowNumber: 1, email: "", reason: "no_prospects_found" }],
+        finder: {
+          provider: "airscale",
+          requested: 0,
+          processed: 0,
+          found: 0,
+          rejected: 0,
+          creditsUsed: 0,
+          truncated: false,
+        },
+        prospectSourcing: prospectSourcingSummary(sourced, requested),
+      };
+    }
+    const prepared = await prepareAirscaleOutboxContacts({
+      brandId: input.brandId,
+      senderAccountId: input.senderAccountId,
+      batchName: input.batchName,
+      finderText: finderTextFromSourcedProspects(sourced),
+    });
+    return {
+      ...prepared,
+      accepted: prepared.accepted.map((contact) => ({
+        ...contact,
+        sourceMode: "auto" as const,
+      })),
+      prospectSourcing: prospectSourcingSummary(sourced, requested),
+    };
+  }
+
   if (input.sourceMode === "airscale") {
-    return prepareAirscaleOutboxContacts({
+    const prepared = await prepareAirscaleOutboxContacts({
       brandId: input.brandId,
       senderAccountId: input.senderAccountId,
       batchName: input.batchName,
       finderText: input.finderText ?? "",
     });
+    return {
+      ...prepared,
+      prospectSourcing: null,
+    };
   }
 
   const parsed = parseManualBatchContacts({ contactsText: input.contactsText });
@@ -621,6 +780,7 @@ async function prepareOutboxContacts(input: {
     })),
     rejected: parsed.rejected,
     finder: null,
+    prospectSourcing: null,
   };
 }
 
@@ -968,17 +1128,24 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
 
   const prepared = await prepareOutboxContacts({
     brandId: input.brandId,
+    brandName: brand.name,
+    brandWebsite: brand.website,
     senderAccountId,
     batchName,
     sourceMode,
     contactsText: input.contactsText,
     finderText: input.finderText,
+    prospectQuery: input.prospectQuery,
+    prospectOffer: input.prospectOffer || subject,
+    maxProspects: input.maxProspects,
   });
   if (!prepared.accepted.length) {
     throw new Error(
       prepared.rejected.length
         ? `No sendable contacts. First rejection: ${prepared.rejected[0]?.reason}`
-        : sourceMode === "airscale"
+        : sourceMode === "auto"
+          ? "No prospects were sourced."
+          : sourceMode === "airscale"
           ? "Airscale targets are required."
           : "Contacts are required."
     );
@@ -1001,9 +1168,11 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     name: batchName,
     offer: subject,
     audience:
-      sourceMode === "airscale"
-        ? `${accepted.length} Airscale-resolved outbox contacts`
-        : `${accepted.length} operator-supplied outbox contacts`,
+      sourceMode === "auto"
+        ? `${accepted.length} auto-sourced outbox contacts`
+        : sourceMode === "airscale"
+          ? `${accepted.length} Airscale-resolved outbox contacts`
+          : `${accepted.length} operator-supplied outbox contacts`,
     createRuntime: true,
   });
   const updatedExperiment = await updateExperimentRecord(input.brandId, experiment.id, {
@@ -1117,6 +1286,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
       batchId,
       batchName,
       sourceMode,
+      prospectSourcing: prepared.prospectSourcing,
       finder: prepared.finder,
       acceptedContacts: accepted.length,
       rejectedContacts: prepared.rejected.length,
@@ -1211,13 +1381,479 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     policy,
     messages: refreshed.messages,
     finder: prepared.finder,
+    prospectSourcing: prepared.prospectSourcing,
     counts: {
       created: messages.length,
+      sourced: prepared.prospectSourcing?.sourced ?? 0,
       found: accepted.length,
       sent,
       failed,
       held: Math.max(0, messages.length - sent - failed),
       rejected: prepared.rejected.length,
     },
+  };
+}
+
+function outboxEnvFlag(name: string) {
+  const raw = String(process.env[name] ?? "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(raw);
+}
+
+function outboxEnvNumber(name: string, fallback: number, min: number, max: number) {
+  return clampInt(process.env[name], fallback, min, max);
+}
+
+function outboxEnvText(name: string, max = 1000) {
+  return compactText(String(process.env[name] ?? "").replace(/\\n/g, "\n"), max);
+}
+
+function outboxEnvMultilineText(name: string, max = 3000) {
+  const raw = String(process.env[name] ?? "")
+    .replace(/\\n/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  return raw.length > max ? raw.slice(0, max).trimEnd() : raw;
+}
+
+function outboxAutopilotEnabled() {
+  return outboxEnvFlag("OUTBOX_AUTOPILOT_ENABLED");
+}
+
+function configuredOutboxAutopilotBrandIds() {
+  const raw =
+    String(process.env.OUTBOX_AUTOPILOT_BRAND_IDS ?? "").trim() ||
+    String(process.env.OUTBOX_AUTOPILOT_BRAND_ID ?? "").trim();
+  if (!raw && outboxAutopilotEnabled()) return ["brand_mlg68b9l"];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function defaultOutboxAutopilotTargetAudience(brand: BrandRecord) {
+  const primaryProfiles = brand.idealCustomerProfiles.filter(Boolean).slice(0, 4);
+  const targetMarkets = brand.targetMarkets.filter(Boolean).slice(0, 4);
+  const targets = primaryProfiles.length ? primaryProfiles : targetMarkets;
+  if (targets.length) {
+    return `Find senior decision makers at companies matching these ICPs: ${targets.join("; ")}. Prioritize people likely to own budget for ${brand.product || brand.name}.`;
+  }
+  return `Find senior decision makers at B2B companies likely to need ${brand.product || brand.name}. Prioritize founders, growth leaders, sales leaders, marketing leaders, and operators with budget authority.`;
+}
+
+function defaultOutboxAutopilotSubject() {
+  return "Quick question for {{company}}";
+}
+
+function defaultOutboxAutopilotBody(brand: BrandRecord) {
+  const benefit =
+    brand.keyBenefits.find(Boolean) ||
+    "start more qualified conversations without adding manual outbound work";
+  const product = brand.product || brand.name;
+  return [
+    "Hi {{firstName}},",
+    "",
+    `I saw {{company}} and thought this might be relevant. ${brand.name} helps teams use ${product} to ${benefit}.`,
+    "",
+    "Worth a quick look if personalized video could help your team get more replies from outbound or customer workflows?",
+    "",
+    "Best,",
+    "Zeynep",
+  ].join("\n");
+}
+
+async function loadOutboxAutopilotBrands(limit: number) {
+  const ids = configuredOutboxAutopilotBrandIds();
+  if (ids.some((id) => id.toLowerCase() === "all")) {
+    return (await listBrands()).slice(0, Math.max(1, limit));
+  }
+  const brands = await Promise.all(ids.map((id) => getBrandById(id, { includeEmbedded: true })));
+  return brands.filter((brand): brand is BrandRecord => Boolean(brand)).slice(0, Math.max(1, limit));
+}
+
+function outboxAutopilotSkip(input: {
+  brand: BrandRecord;
+  reason: string;
+  senderAccountId?: string;
+  cooldownHours: number;
+}): OutboxAutopilotBrandResult {
+  return {
+    brandId: input.brand.id,
+    brandName: input.brand.name,
+    action: "skip",
+    reason: input.reason,
+    senderAccountId: input.senderAccountId ?? "",
+    sent: 0,
+    held: 0,
+    failed: 0,
+    sourced: 0,
+    found: 0,
+    batchId: "",
+    cooldownHours: input.cooldownHours,
+  };
+}
+
+function outboxRunBatchId(run: OutreachRun) {
+  const externalRef = String(run.externalRef ?? "").trim();
+  return externalRef.startsWith(OUTBOX_V1_EXTERNAL_REF_PREFIX)
+    ? externalRef.slice(OUTBOX_V1_EXTERNAL_REF_PREFIX.length)
+    : run.id;
+}
+
+export async function releaseOutboxHeldMessagesForBrand(
+  brandId: string,
+  options: {
+    senderAccountId?: string;
+    limit?: number;
+  } = {}
+): Promise<OutboxHeldSendResult> {
+  const limit = clampInt(options.limit, 25, 1, 100);
+  const preferredSenderAccountId = String(options.senderAccountId ?? "").trim();
+  const runs = (await listBrandRuns(brandId))
+    .filter((run) => isOutboxRunExternalRef(run.externalRef))
+    .sort((left, right) => (left.createdAt < right.createdAt ? -1 : 1));
+  let runsEvaluated = 0;
+  let messagesEvaluated = 0;
+  let sent = 0;
+  let failed = 0;
+  let held = 0;
+  let lastReason = "";
+  let activeSenderAccountId = preferredSenderAccountId;
+
+  if (!outboundSendingEnabled()) {
+    return {
+      brandId,
+      senderAccountId: preferredSenderAccountId,
+      runsEvaluated: 0,
+      messagesEvaluated: 0,
+      sent: 0,
+      failed: 0,
+      held: 0,
+      skipped: true,
+      reason: "outbound_sending_disabled",
+    };
+  }
+
+  for (const run of runs) {
+    if (sent + failed >= limit) break;
+    if (preferredSenderAccountId && run.accountId !== preferredSenderAccountId) continue;
+    const messages = (await listRunMessages(run.id))
+      .filter((message) => message.status === "scheduled")
+      .sort((left, right) => (left.scheduledAt < right.scheduledAt ? -1 : 1));
+    if (!messages.length) continue;
+
+    runsEvaluated += 1;
+    messagesEvaluated += messages.length;
+    const account = await getOutreachAccount(run.accountId).catch(() => null);
+    if (!account || account.provider !== "customerio") {
+      held += messages.length;
+      lastReason = "sender_account_missing_or_not_customerio";
+      continue;
+    }
+    activeSenderAccountId = account.id;
+    try {
+      await ensureOutboxSenderAllowed({ brandId, accountId: account.id });
+    } catch (error) {
+      held += messages.length;
+      lastReason = error instanceof Error ? error.message : "sender_not_allowed";
+      continue;
+    }
+    const secrets = await getOutreachAccountSecrets(account.id);
+    if (!secrets?.customerIoAppApiKey.trim()) {
+      held += messages.length;
+      lastReason = "customerio_app_api_key_missing";
+      continue;
+    }
+    const reply = await resolveReplyToEmail({ brandId, account });
+    if (!reply.replyToEmail) {
+      held += messages.length;
+      lastReason = "reply_to_email_missing";
+      continue;
+    }
+
+    const remainingLimit = Math.max(0, limit - sent - failed);
+    const policy = await policyForSender({
+      brandId,
+      account,
+      requestedContacts: messages.length,
+      requestedSendNow: remainingLimit,
+    });
+    if (policy.sendNow <= 0) {
+      held += messages.length;
+      lastReason = policy.reasons[0] ?? "sender_policy_cap";
+      continue;
+    }
+
+    await updateOutreachRun(run.id, {
+      status: "sending",
+      pauseReason: "",
+      lastError: "",
+    });
+    const leads = await listRunLeads(run.id);
+    const leadById = new Map(leads.map((lead) => [lead.id, lead] as const));
+    const sendableMessages = messages.slice(0, policy.sendNow);
+    const batchId = outboxRunBatchId(run);
+
+    for (const message of sendableMessages) {
+      const lead = leadById.get(message.leadId) ?? null;
+      if (!lead?.email) {
+        failed += 1;
+        await updateRunMessage(message.id, { status: "failed", lastError: "Lead email missing" });
+        continue;
+      }
+      const send = await sendOutreachMessage({
+        message,
+        account,
+        secrets,
+        replyToEmail: reply.replyToEmail,
+        recipient: lead.email,
+        runId: run.id,
+        experimentId: run.experimentId,
+      });
+      const generationMeta = {
+        ...message.generationMeta,
+        outboxV1: true,
+        batchId,
+        selectedForImmediateSend: true,
+        holdReason: "",
+        releasedFromHoldAt: nowIso(),
+        senderAccountId: account.id,
+        senderAccountName: account.name,
+        senderFromEmail: getOutreachAccountFromEmail(account).trim(),
+        replyToEmail: reply.replyToEmail,
+        outboxPolicy: policy,
+      };
+      if (send.ok) {
+        sent += 1;
+        const sentAt = nowIso();
+        await updateRunMessage(message.id, {
+          status: "sent",
+          providerMessageId: send.providerMessageId,
+          sentAt,
+          lastError: "",
+          generationMeta,
+        });
+        await updateRunLead(lead.id, { status: "sent" });
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "outbox_held_message_sent",
+          payload: {
+            batchId,
+            messageId: message.id,
+            accountId: account.id,
+            fromEmail: getOutreachAccountFromEmail(account).trim(),
+            recipient: lead.email,
+            providerMessageId: send.providerMessageId,
+          },
+        });
+      } else {
+        failed += 1;
+        await updateRunMessage(message.id, {
+          status: "failed",
+          lastError: send.error,
+          generationMeta,
+        });
+        await createOutreachEvent({
+          runId: run.id,
+          eventType: "outbox_held_dispatch_failed",
+          payload: {
+            batchId,
+            messageId: message.id,
+            accountId: account.id,
+            fromEmail: getOutreachAccountFromEmail(account).trim(),
+            recipient: lead.email,
+            error: send.error,
+          },
+        });
+      }
+    }
+    const refreshed = await refreshOutboxRunMetrics(run);
+    held += refreshed.messages.filter((message) => message.status === "scheduled").length;
+  }
+
+  return {
+    brandId,
+    senderAccountId: activeSenderAccountId,
+    runsEvaluated,
+    messagesEvaluated,
+    sent,
+    failed,
+    held,
+    skipped: runsEvaluated === 0,
+    reason: sent > 0 ? "released_held_messages" : lastReason || "no_held_messages",
+  };
+}
+
+export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilotTickResult> {
+  const enabled = outboxAutopilotEnabled();
+  if (!enabled) {
+    return {
+      enabled: false,
+      brandsConfigured: configuredOutboxAutopilotBrandIds().length,
+      brandsProcessed: 0,
+      launched: 0,
+      releasedHeld: 0,
+      sent: 0,
+      held: 0,
+      failed: 0,
+      results: [],
+    };
+  }
+
+  const maxBrands = clampInt(limit, 1, 1, 10);
+  const brands = await loadOutboxAutopilotBrands(maxBrands);
+  const senderAccountId = outboxEnvText("OUTBOX_AUTOPILOT_SENDER_ACCOUNT_ID", 120);
+  const maxProspects = outboxEnvNumber("OUTBOX_AUTOPILOT_MAX_PROSPECTS", 50, 1, 100);
+  const requestedSendNow = outboxEnvNumber("OUTBOX_AUTOPILOT_REQUESTED_SEND_NOW", 25, 0, 100);
+  const cooldownHours = outboxEnvNumber("OUTBOX_AUTOPILOT_MIN_HOURS_BETWEEN_BATCHES", 24, 1, 168);
+  const timezone = outboxEnvText("OUTBOX_AUTOPILOT_TIMEZONE", 80) || DEFAULT_TIMEZONE;
+  const configuredTargetAudience = outboxEnvText("OUTBOX_AUTOPILOT_TARGET_AUDIENCE", 1000);
+  const configuredSubject = outboxEnvText("OUTBOX_AUTOPILOT_SUBJECT", 200);
+  const configuredBody = outboxEnvMultilineText("OUTBOX_AUTOPILOT_BODY", 3000);
+  const configuredBatchName = outboxEnvText("OUTBOX_AUTOPILOT_BATCH_NAME", 120);
+  const results: OutboxAutopilotBrandResult[] = [];
+
+  for (const brand of brands) {
+    try {
+      const release = await releaseOutboxHeldMessagesForBrand(brand.id, {
+        senderAccountId,
+        limit: requestedSendNow || 25,
+      });
+      if (release.sent > 0 || release.failed > 0) {
+        results.push({
+          brandId: brand.id,
+          brandName: brand.name,
+          action: "release_held",
+          reason: release.reason,
+          senderAccountId: release.senderAccountId,
+          sent: release.sent,
+          held: release.held,
+          failed: release.failed,
+          sourced: 0,
+          found: 0,
+          batchId: "",
+          cooldownHours,
+        });
+        continue;
+      }
+      if (release.held > 0) {
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason: release.reason || "held_messages_waiting_for_sender_capacity",
+          senderAccountId: release.senderAccountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+
+      const latestBatch = (await listOutboxBatches(brand.id, 1))[0] ?? null;
+      const latestCreatedAtMs = latestBatch ? Date.parse(latestBatch.run.createdAt) : 0;
+      const cooldownMs = cooldownHours * 60 * 60 * 1000;
+      if (Number.isFinite(latestCreatedAtMs) && latestCreatedAtMs > 0 && Date.now() - latestCreatedAtMs < cooldownMs) {
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason: "cooldown_active",
+          senderAccountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+
+      const state = await getOutboxConsoleState(brand.id, senderAccountId);
+      if (!state.outboundSendingEnabled) {
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason: "outbound_sending_disabled",
+          senderAccountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+
+      const selectedSender = senderAccountId
+        ? state.senders.find((sender) => sender.accountId === senderAccountId) ?? null
+        : state.senders.find((sender) => sender.ready) ?? null;
+      if (!selectedSender) {
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason: "no_customerio_sender",
+          senderAccountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+      if (!selectedSender.ready) {
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason: selectedSender.reason || "sender_not_ready",
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+      if (!state.selectedPolicy || state.selectedPolicy.availableNow <= 0) {
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason: state.selectedPolicy?.reasons[0] || "sender_capacity_unavailable",
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+
+      const launch = await launchOutboxBatch({
+        brandId: brand.id,
+        senderAccountId: selectedSender.accountId,
+        batchName: configuredBatchName || `Autopilot ${new Date().toLocaleDateString("en-US")}`,
+        sourceMode: "auto",
+        prospectQuery: configuredTargetAudience || defaultOutboxAutopilotTargetAudience(brand),
+        prospectOffer: configuredBody || brand.product || brand.name,
+        maxProspects,
+        subject: configuredSubject || defaultOutboxAutopilotSubject(),
+        body: configuredBody || defaultOutboxAutopilotBody(brand),
+        requestedSendNow: Math.min(requestedSendNow || 25, state.selectedPolicy.availableNow),
+        timezone,
+      });
+      results.push({
+        brandId: brand.id,
+        brandName: brand.name,
+        action: "launch",
+        reason: "auto_sourced_batch_launched",
+        senderAccountId: selectedSender.accountId,
+        sent: launch.counts.sent,
+        held: launch.counts.held,
+        failed: launch.counts.failed,
+        sourced: launch.counts.sourced,
+        found: launch.counts.found,
+        batchId: launch.batchId,
+        cooldownHours,
+      });
+    } catch (error) {
+      results.push({
+        brandId: brand.id,
+        brandName: brand.name,
+        action: "error",
+        reason: error instanceof Error ? error.message : "outbox_autopilot_failed",
+        senderAccountId,
+        sent: 0,
+        held: 0,
+        failed: 1,
+        sourced: 0,
+        found: 0,
+        batchId: "",
+        cooldownHours,
+      });
+    }
+  }
+
+  return {
+    enabled: true,
+    brandsConfigured: brands.length,
+    brandsProcessed: results.length,
+    launched: results.filter((result) => result.action === "launch").length,
+    releasedHeld: results.filter((result) => result.action === "release_held").length,
+    sent: results.reduce((total, result) => total + result.sent, 0),
+    held: results.reduce((total, result) => total + result.held, 0),
+    failed: results.reduce((total, result) => total + result.failed, 0),
+    results,
   };
 }

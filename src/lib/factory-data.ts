@@ -105,9 +105,9 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
     website: "https://bhuman.ai/",
     tone: "Modern, confident, results-driven, B2B growth-focused",
     notes:
-      "Claims: trusted by over 200,000 innovators; campaign metrics cited (2x opens, 7x click-throughs, 4x conversions) backed by customer campaign data; testimonials from Steve Anderson, Henry Reith, and Alasdair Sutherland praising ease of use and time savings.",
+      "Current outbound offer: selected prospects can get a one month free BHuman license. Claims: trusted by over 200,000 innovators; campaign metrics cited (2x opens, 7x click-throughs, 4x conversions) backed by customer campaign data; testimonials from Steve Anderson, Henry Reith, and Alasdair Sutherland praising ease of use and time savings.",
     product:
-      "AI platform to create realistic personalized videos at scale (prompt-to-video generation and bulk personalization), with delivery and workflow automation via no-code tools and API.",
+      "AI platform to create realistic personalized videos at scale. Current offer: one month free BHuman license for selected prospects to try prompt-to-video generation, bulk personalization, delivery workflows, and API/no-code automation.",
     socialDiscoveryCommentPrompt: "",
     socialDiscoveryPlatforms: [],
     socialDiscoveryQueries: [],
@@ -123,6 +123,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
       "Article or interview series featuring creators",
       "Founder interview access",
       "Trial accounts for selected creators to test the product",
+      "One month free BHuman license for selected outbound prospects",
       "Published coverage and follow-up visibility around featured creators",
     ],
     targetMarkets: [
@@ -156,6 +157,7 @@ const EMBEDDED_BRAND_FALLBACKS: BrandRecord[] = [
       "Saves time by automating what used to be manual personalized video recording",
       "Scales personalized video creation to hundreds or thousands of recipients",
       "Fast production (render in minutes) with no editing required",
+      "Selected prospects can try BHuman with a one month free license before deciding on a paid plan",
     ],
     domains: [],
     leads: [],

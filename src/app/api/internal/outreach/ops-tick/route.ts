@@ -64,7 +64,7 @@ async function handleOpsTick(request: Request) {
       { timeoutMs: 70_000 }
     ),
     gmailUiWorkerTask,
-    runCronTask("inboxSync", () => runInboxSyncTick(4), { timeoutMs: 60_000 }),
+    runCronTask("inboxSync", () => runInboxSyncTick(4), { timeoutMs: 90_000 }),
     runCronTask("senderLaunch", () => runSenderLaunchTick(8, { mailboxSync: false }), {
       timeoutMs: 45_000,
     }),

@@ -21405,7 +21405,17 @@ export async function runInboxSyncTick(limit = 12): Promise<{
       brandId: candidate.brandId,
       mailboxAccountId: candidate.mailboxAccountId,
       maxMessages: 10,
-    });
+    }).catch((error) => ({
+      ok: false as const,
+      reason: inboxSyncErrorMessage(error),
+      mailboxAccountId: candidate.mailboxAccountId,
+      mailboxName: "",
+      importedCount: 0,
+      duplicateCount: 0,
+      skippedCount: 0,
+      lastInboxUid: 0,
+      threadIds: [],
+    }));
     if (result.ok) {
       mailboxesSynced += 1;
       importedInboxMessages += result.importedCount;

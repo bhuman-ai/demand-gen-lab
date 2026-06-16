@@ -81,6 +81,7 @@ const OUTBOX_PLACEMENT_CANARY_SEND_NOW = 3;
 const OUTBOX_PLACEMENT_BLOCK_SPAM_RATE = 0.5;
 const OUTBOX_PLACEMENT_PROBE_COOLDOWN_HOURS = 12;
 const OUTBOX_PLACEMENT_FAILED_PROBE_PAUSE_HOURS = 12;
+const OUTBOX_PLACEMENT_MONITOR_POOL_FAILURE_PAUSE_HOURS = 1;
 const OUTBOX_PLACEMENT_PROBE_MAX_ATTEMPTS = 5;
 
 const EMPTY_OUTREACH_ACCOUNT_SECRETS: OutreachAccountSecrets = {
@@ -2204,9 +2205,12 @@ async function resolveOutboxPlacementDecision(input: {
   if (!completedProbe) {
     const checkedAt = latestProbe ? outboxProbeReferenceTime(latestProbe) : "";
     const latestProbeAgeHours = checkedAt ? ageHoursSince(checkedAt) : 0;
-    const recentFailedProbe =
-      latestProbe?.status === "failed" && latestProbeAgeHours <= OUTBOX_PLACEMENT_FAILED_PROBE_PAUSE_HOURS;
     const monitorPoolFailure = latestProbe ? isOutboxMonitorPoolFailure(latestProbe.lastError) : false;
+    const failedProbePauseHours = monitorPoolFailure
+      ? OUTBOX_PLACEMENT_MONITOR_POOL_FAILURE_PAUSE_HOURS
+      : OUTBOX_PLACEMENT_FAILED_PROBE_PAUSE_HOURS;
+    const recentFailedProbe =
+      latestProbe?.status === "failed" && latestProbeAgeHours <= failedProbePauseHours;
     const reason = recentFailedProbe
       ? monitorPoolFailure
         ? "placement_monitor_pool_unavailable"

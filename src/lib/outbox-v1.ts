@@ -1090,16 +1090,46 @@ async function filterRecentOutboxRecipients(input: {
   if (supabase && emails.length > 0) {
     const { data, error } = await supabase
       .from("demanddev_outreach_messages")
-      .select("to_email,status,created_at,sent_at")
+      .select("to_email,lead_id,status,created_at,sent_at")
       .eq("brand_id", input.brandId)
-      .in("to_email", Array.from(new Set(emails)))
       .in("status", ["scheduled", "sent", "replied"])
       .gte("created_at", daysAgoIso(OUTBOX_RECENT_RECIPIENT_DEDUPE_DAYS))
       .limit(5000);
     if (!error) {
+      const messageRows = data ?? [];
+      const leadIds = Array.from(
+        new Set(
+          messageRows
+            .map((row) => String((row as Record<string, unknown>).lead_id ?? "").trim())
+            .filter(Boolean)
+        )
+      );
+      const leadEmailById = new Map<string, string>();
+      if (leadIds.length > 0) {
+        const { data: leadRows, error: leadError } = await supabase
+          .from("demanddev_outreach_run_leads")
+          .select("id,email")
+          .in("id", leadIds)
+          .limit(5000);
+        if (!leadError) {
+          for (const row of leadRows ?? []) {
+            const record = row as Record<string, unknown>;
+            const id = String(record.id ?? "").trim();
+            const email = String(record.email ?? "").trim().toLowerCase();
+            if (id && email) leadEmailById.set(id, email);
+          }
+        }
+      }
       for (const row of data ?? []) {
-        const email = String((row as Record<string, unknown>).to_email ?? "").trim().toLowerCase();
-        if (email) recentEmails.add(email);
+        const record = row as Record<string, unknown>;
+        const leadId = String(record.lead_id ?? "").trim();
+        const candidates = [
+          String(record.to_email ?? "").trim().toLowerCase(),
+          leadEmailById.get(leadId) ?? "",
+        ];
+        for (const email of candidates) {
+          if (email) recentEmails.add(email);
+        }
       }
     }
   }

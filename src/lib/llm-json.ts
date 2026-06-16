@@ -439,8 +439,10 @@ export async function generateJsonWithLlm(input: {
   providerOverride?: "openai" | "openrouter";
 }): Promise<LlmJsonResult> {
   const provider = asString(input.providerOverride ?? process.env.LLM_JSON_PROVIDER).toLowerCase();
+  const providerExplicitlyOverridden = input.providerOverride !== undefined;
   const reasoningEffort = input.reasoningEffort || "high";
   if (provider === "openrouter") {
+    let lastOpenRouterError: unknown = null;
     try {
       return await callAndRecordLlmJson({
         task: input.task,
@@ -462,6 +464,7 @@ export async function generateJsonWithLlm(input: {
           }),
       });
     } catch (openRouterError) {
+      lastOpenRouterError = openRouterError;
       if (asString(process.env.OPENROUTER_API_KEY)) {
         try {
           return await callAndRecordLlmJson({
@@ -485,10 +488,17 @@ export async function generateJsonWithLlm(input: {
               }),
           });
         } catch (openRouterLooseError) {
+          lastOpenRouterError = openRouterLooseError;
+          if (providerExplicitlyOverridden) {
+            throw openRouterLooseError;
+          }
           if (!asString(process.env.OPENAI_API_KEY)) {
             throw openRouterLooseError;
           }
         }
+      }
+      if (providerExplicitlyOverridden) {
+        throw lastOpenRouterError;
       }
       if (!asString(process.env.OPENAI_API_KEY)) {
         throw openRouterError;

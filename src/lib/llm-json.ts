@@ -182,7 +182,12 @@ function openRouterTaskEnvKey(task: LlmTask) {
 }
 
 function canUseHighIntelligenceModel(task: LlmTask) {
-  return task === "mission_operator" || task === "mission_plan_generation" || task === "operator_chat";
+  return (
+    task === "mission_operator" ||
+    task === "mission_plan_generation" ||
+    task === "operator_chat" ||
+    task === "outbox_message_experiment"
+  );
 }
 
 function routineOpenRouterModel() {
@@ -431,8 +436,9 @@ export async function generateJsonWithLlm(input: {
   reasoningEffort?: string;
   openAiOverrideModel?: string;
   openRouterOverrideModel?: string;
+  providerOverride?: "openai" | "openrouter";
 }): Promise<LlmJsonResult> {
-  const provider = asString(process.env.LLM_JSON_PROVIDER).toLowerCase();
+  const provider = asString(input.providerOverride ?? process.env.LLM_JSON_PROVIDER).toLowerCase();
   const reasoningEffort = input.reasoningEffort || "high";
   if (provider === "openrouter") {
     try {

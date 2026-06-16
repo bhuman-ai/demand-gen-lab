@@ -69,6 +69,9 @@ const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER = 4;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR = 6;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_CAP = 20;
 const DEFAULT_OUTBOX_MESSAGE_EXPERIMENT_MODEL = "openai/gpt-5.5";
+const OUTBOX_PROSPECT_QUEUE_TABLE = "demanddev_outbox_prospect_queue";
+const DEFAULT_OUTBOX_QUEUE_TARGET_READY = 100;
+const DEFAULT_OUTBOX_QUEUE_TTL_DAYS = 45;
 
 const EMPTY_OUTREACH_ACCOUNT_SECRETS: OutreachAccountSecrets = {
   customerIoApiKey: "",
@@ -101,7 +104,7 @@ type OutboxFinderTarget = {
   sourceUrl: string;
 };
 
-type OutboxPreparedContact = ManualBatchAcceptedContact & {
+export type OutboxPreparedContact = ManualBatchAcceptedContact & {
   sourceMode: OutboxSourceMode;
   realVerifiedEmail: boolean;
   emailVerification: EmailVerificationState;
@@ -228,6 +231,11 @@ export type OutboxConsoleState = {
   selectedPolicy: OutboxPolicyDecision | null;
   outboundSendingEnabled: boolean;
   maxBatchContacts: number;
+  queue: {
+    available: boolean;
+    ready: number;
+    reason: string;
+  };
 };
 
 export type OutboxLaunchInput = {
@@ -244,6 +252,9 @@ export type OutboxLaunchInput = {
   body: string;
   requestedSendNow?: number;
   timezone?: string;
+  preparedContacts?: OutboxPreparedContact[];
+  preparedFinder?: OutboxFinderSummary | null;
+  preparedProspectSourcing?: OutboxProspectSourcingSummary | null;
 };
 
 export type OutboxLaunchResult = {
@@ -293,6 +304,11 @@ export type OutboxAutopilotBrandResult = {
   found: number;
   batchId: string;
   cooldownHours: number;
+  queueAvailable?: boolean;
+  queueReady?: number;
+  queueInserted?: number;
+  queueReserved?: number;
+  queueReason?: string;
 };
 
 export type OutboxAutopilotTickResult = {
@@ -311,6 +327,72 @@ type OutboxAutopilotSenderChoice = {
   sender: OutboxSenderOption;
   account: OutreachAccount;
   policy: OutboxPolicyDecision;
+};
+
+type OutboxProspectQueueStatus =
+  | "eligible"
+  | "reserved"
+  | "held"
+  | "sent"
+  | "failed"
+  | "rejected"
+  | "suppressed"
+  | "expired";
+
+type OutboxQueuedProspect = {
+  id: string;
+  brandId: string;
+  email: string;
+  emailNormalized: string;
+  name: string;
+  company: string;
+  title: string;
+  domain: string;
+  domainNormalized: string;
+  sourceUrl: string;
+  status: OutboxProspectQueueStatus;
+  sourceProvider: string;
+  sourceMode: OutboxSourceMode;
+  sourceQuery: string;
+  offer: string;
+  realVerifiedEmail: boolean;
+  emailVerification: EmailVerificationState;
+  finderMeta: Record<string, unknown>;
+  reservationId: string;
+  reservedRunId: string;
+  reservedMessageId: string;
+  reservedAt: string;
+  sentAt: string;
+  rejectedReason: string;
+  lastError: string;
+  attempts: number;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type OutboxQueueFillResult = {
+  available: boolean;
+  skipped: boolean;
+  reason: string;
+  readyBefore: number;
+  readyAfter: number;
+  requested: number;
+  sourced: number;
+  found: number;
+  inserted: number;
+  rejected: number;
+  duplicate: number;
+  finder: OutboxFinderSummary | null;
+  prospectSourcing: OutboxProspectSourcingSummary | null;
+};
+
+type OutboxQueueReservation = {
+  available: boolean;
+  reason: string;
+  reservationId: string;
+  prospects: OutboxQueuedProspect[];
+  contacts: OutboxPreparedContact[];
 };
 
 function nowIso() {
@@ -368,6 +450,274 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function normalizeEmail(value: unknown) {
+  return extractFirstEmailAddress(value).trim().toLowerCase();
+}
+
+function outboxQueueId() {
+  return `oq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function outboxQueueReservationId() {
+  return `oqr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function outboxQueueTableMissing(error: unknown) {
+  const record = asRecord(error);
+  const message = String(record.message ?? record.details ?? record.hint ?? "").toLowerCase();
+  const code = String(record.code ?? "").trim();
+  return code === "42P01" || message.includes(OUTBOX_PROSPECT_QUEUE_TABLE.toLowerCase());
+}
+
+function mapQueuedProspectRow(input: unknown): OutboxQueuedProspect {
+  const row = asRecord(input);
+  const status = String(row.status ?? "eligible").trim() as OutboxProspectQueueStatus;
+  const sourceMode = String(row.source_mode ?? row.sourceMode ?? "auto").trim() as OutboxSourceMode;
+  return {
+    id: String(row.id ?? ""),
+    brandId: String(row.brand_id ?? row.brandId ?? ""),
+    email: String(row.email ?? ""),
+    emailNormalized: String(row.email_normalized ?? row.emailNormalized ?? ""),
+    name: String(row.name ?? ""),
+    company: String(row.company ?? ""),
+    title: String(row.title ?? ""),
+    domain: String(row.domain ?? ""),
+    domainNormalized: String(row.domain_normalized ?? row.domainNormalized ?? ""),
+    sourceUrl: String(row.source_url ?? row.sourceUrl ?? ""),
+    status,
+    sourceProvider: String(row.source_provider ?? row.sourceProvider ?? "airscale"),
+    sourceMode: sourceMode === "contacts" || sourceMode === "airscale" || sourceMode === "auto" ? sourceMode : "auto",
+    sourceQuery: String(row.source_query ?? row.sourceQuery ?? ""),
+    offer: String(row.offer ?? ""),
+    realVerifiedEmail: row.real_verified_email === true || row.realVerifiedEmail === true,
+    emailVerification: asRecord(row.email_verification ?? row.emailVerification) as EmailVerificationState,
+    finderMeta: asRecord(row.finder_meta ?? row.finderMeta),
+    reservationId: String(row.reservation_id ?? row.reservationId ?? ""),
+    reservedRunId: String(row.reserved_run_id ?? row.reservedRunId ?? ""),
+    reservedMessageId: String(row.reserved_message_id ?? row.reservedMessageId ?? ""),
+    reservedAt: String(row.reserved_at ?? row.reservedAt ?? ""),
+    sentAt: String(row.sent_at ?? row.sentAt ?? ""),
+    rejectedReason: String(row.rejected_reason ?? row.rejectedReason ?? ""),
+    lastError: String(row.last_error ?? row.lastError ?? ""),
+    attempts: Math.max(0, Number(row.attempts ?? 0) || 0),
+    expiresAt: String(row.expires_at ?? row.expiresAt ?? ""),
+    createdAt: String(row.created_at ?? row.createdAt ?? ""),
+    updatedAt: String(row.updated_at ?? row.updatedAt ?? ""),
+  };
+}
+
+function queuedProspectToPreparedContact(prospect: OutboxQueuedProspect, rowNumber: number): OutboxPreparedContact {
+  return {
+    rowNumber,
+    email: prospect.email,
+    name: prospect.name,
+    company: prospect.company,
+    title: prospect.title,
+    domain: prospect.domain,
+    originalSourceUrl: prospect.sourceUrl,
+    warnings: [],
+    sourceMode: "auto",
+    realVerifiedEmail: prospect.realVerifiedEmail,
+    emailVerification: prospect.emailVerification,
+    finderMeta: {
+      ...prospect.finderMeta,
+      outboxQueueId: prospect.id,
+      sourceProvider: prospect.sourceProvider,
+      sourceQuery: prospect.sourceQuery,
+    },
+  };
+}
+
+async function countEligibleQueuedProspects(brandId: string): Promise<{ available: boolean; count: number; reason: string }> {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return { available: false, count: 0, reason: "supabase_unavailable" };
+  const { count, error } = await supabase
+    .from(OUTBOX_PROSPECT_QUEUE_TABLE)
+    .select("id", { count: "exact" })
+    .eq("brand_id", brandId)
+    .eq("status", "eligible")
+    .or(`expires_at.is.null,expires_at.gt.${nowIso()}`)
+    .limit(1);
+  if (error) {
+    return {
+      available: !outboxQueueTableMissing(error),
+      count: 0,
+      reason: outboxQueueTableMissing(error) ? "outbox_queue_table_missing" : error.message,
+    };
+  }
+  return { available: true, count: Math.max(0, Number(count ?? 0) || 0), reason: "" };
+}
+
+async function insertQueuedOutboxContacts(input: {
+  brandId: string;
+  contacts: OutboxPreparedContact[];
+  sourceQuery: string;
+  offer: string;
+  ttlDays: number;
+}): Promise<{ available: boolean; inserted: number; duplicate: number; reason: string }> {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return { available: false, inserted: 0, duplicate: 0, reason: "supabase_unavailable" };
+  const contactsByEmail = new Map<string, OutboxPreparedContact>();
+  for (const contact of input.contacts) {
+    const email = normalizeEmail(contact.email);
+    if (!email || contactsByEmail.has(email)) continue;
+    contactsByEmail.set(email, contact);
+  }
+  const emails = [...contactsByEmail.keys()];
+  if (!emails.length) return { available: true, inserted: 0, duplicate: 0, reason: "no_contacts" };
+
+  const existingResult = await supabase
+    .from(OUTBOX_PROSPECT_QUEUE_TABLE)
+    .select("email_normalized")
+    .eq("brand_id", input.brandId)
+    .in("email_normalized", emails)
+    .limit(5000);
+  if (existingResult.error) {
+    return {
+      available: !outboxQueueTableMissing(existingResult.error),
+      inserted: 0,
+      duplicate: 0,
+      reason: outboxQueueTableMissing(existingResult.error) ? "outbox_queue_table_missing" : existingResult.error.message,
+    };
+  }
+
+  const existing = new Set((existingResult.data ?? []).map((row) => String(row.email_normalized ?? "").trim().toLowerCase()));
+  const expiresAt = new Date(Date.now() + Math.max(1, input.ttlDays) * 24 * 60 * 60 * 1000).toISOString();
+  const rows = emails
+    .filter((email) => !existing.has(email))
+    .map((email) => {
+      const contact = contactsByEmail.get(email)!;
+      return {
+        id: outboxQueueId(),
+        brand_id: input.brandId,
+        email: contact.email,
+        email_normalized: email,
+        name: contact.name,
+        company: contact.company,
+        title: contact.title,
+        domain: contact.domain,
+        domain_normalized: normalizeDomain(contact.domain),
+        source_url: contact.originalSourceUrl,
+        status: "eligible",
+        source_provider: "airscale",
+        source_mode: contact.sourceMode,
+        source_query: compactText(input.sourceQuery, 1000),
+        offer: compactText(input.offer, 1000),
+        real_verified_email: contact.realVerifiedEmail === true,
+        email_verification: contact.emailVerification ?? {},
+        finder_meta: contact.finderMeta ?? {},
+        expires_at: expiresAt,
+      };
+    });
+
+  if (!rows.length) {
+    return { available: true, inserted: 0, duplicate: emails.length, reason: "all_contacts_already_queued" };
+  }
+  const { error } = await supabase.from(OUTBOX_PROSPECT_QUEUE_TABLE).insert(rows);
+  if (error) {
+    return {
+      available: !outboxQueueTableMissing(error),
+      inserted: 0,
+      duplicate: emails.length - rows.length,
+      reason: outboxQueueTableMissing(error) ? "outbox_queue_table_missing" : error.message,
+    };
+  }
+  return {
+    available: true,
+    inserted: rows.length,
+    duplicate: emails.length - rows.length,
+    reason: "",
+  };
+}
+
+async function reserveQueuedOutboxProspects(input: {
+  brandId: string;
+  limit: number;
+}): Promise<OutboxQueueReservation> {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) {
+    return { available: false, reason: "supabase_unavailable", reservationId: "", prospects: [], contacts: [] };
+  }
+  const limit = clampInt(input.limit, 0, 0, 100);
+  if (limit <= 0) {
+    return { available: true, reason: "no_capacity_requested", reservationId: "", prospects: [], contacts: [] };
+  }
+  const { data, error } = await supabase
+    .from(OUTBOX_PROSPECT_QUEUE_TABLE)
+    .select("*")
+    .eq("brand_id", input.brandId)
+    .eq("status", "eligible")
+    .or(`expires_at.is.null,expires_at.gt.${nowIso()}`)
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) {
+    return {
+      available: !outboxQueueTableMissing(error),
+      reason: outboxQueueTableMissing(error) ? "outbox_queue_table_missing" : error.message,
+      reservationId: "",
+      prospects: [],
+      contacts: [],
+    };
+  }
+  const prospects: OutboxQueuedProspect[] = [];
+  const reservationId = outboxQueueReservationId();
+  for (const row of data ?? []) {
+    const prospect = mapQueuedProspectRow(row);
+    const update = await supabase
+      .from(OUTBOX_PROSPECT_QUEUE_TABLE)
+      .update({
+        status: "reserved",
+        reservation_id: reservationId,
+        reserved_at: nowIso(),
+        attempts: prospect.attempts + 1,
+        last_error: "",
+      })
+      .eq("id", prospect.id)
+      .eq("status", "eligible")
+      .select("*")
+      .maybeSingle();
+    if (!update.error && update.data) prospects.push(mapQueuedProspectRow(update.data));
+  }
+  return {
+    available: true,
+    reason: prospects.length ? "reserved" : "no_eligible_queued_prospects",
+    reservationId,
+    prospects,
+    contacts: prospects.map((prospect, index) => queuedProspectToPreparedContact(prospect, index + 1)),
+  };
+}
+
+async function updateQueuedOutboxProspects(
+  ids: string[],
+  patch: Partial<{
+    status: OutboxProspectQueueStatus;
+    reservedRunId: string;
+    reservedMessageId: string;
+    sentAt: string | null;
+    rejectedReason: string;
+    lastError: string;
+  }>
+) {
+  const supabase = getSupabaseAdmin();
+  const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+  if (!supabase || !uniqueIds.length) return;
+  const update: Record<string, unknown> = {};
+  if (patch.status) update.status = patch.status;
+  if (patch.reservedRunId !== undefined) update.reserved_run_id = patch.reservedRunId;
+  if (patch.reservedMessageId !== undefined) update.reserved_message_id = patch.reservedMessageId;
+  if (patch.sentAt !== undefined) update.sent_at = patch.sentAt;
+  if (patch.rejectedReason !== undefined) update.rejected_reason = patch.rejectedReason;
+  if (patch.lastError !== undefined) update.last_error = patch.lastError;
+  if (!Object.keys(update).length) return;
+  await supabase.from(OUTBOX_PROSPECT_QUEUE_TABLE).update(update).in("id", uniqueIds);
+}
+
+function queuedProspectIdFromMessage(message: OutreachMessage) {
+  const meta = asRecord(message.generationMeta);
+  const finder = asRecord(meta.finder);
+  return String(finder.outboxQueueId ?? meta.outboxQueueId ?? "").trim();
 }
 
 function normalizeDomain(value: unknown) {
@@ -1314,6 +1664,101 @@ async function prepareOutboxContacts(input: {
   };
 }
 
+async function fillOutboxProspectQueueForBrand(input: {
+  brandId: string;
+  senderAccountId: string;
+  batchName: string;
+  targetAudience: string;
+  offer: string;
+  targetReady: number;
+  maxSourceNow: number;
+  ttlDays: number;
+}): Promise<OutboxQueueFillResult> {
+  const readyBefore = await countEligibleQueuedProspects(input.brandId);
+  if (!readyBefore.available) {
+    return {
+      available: false,
+      skipped: true,
+      reason: readyBefore.reason,
+      readyBefore: 0,
+      readyAfter: 0,
+      requested: 0,
+      sourced: 0,
+      found: 0,
+      inserted: 0,
+      rejected: 0,
+      duplicate: 0,
+      finder: null,
+      prospectSourcing: null,
+    };
+  }
+
+  const targetReady = clampInt(input.targetReady, DEFAULT_OUTBOX_QUEUE_TARGET_READY, 1, 1000);
+  const missing = Math.max(0, targetReady - readyBefore.count);
+  if (missing <= 0) {
+    return {
+      available: true,
+      skipped: true,
+      reason: "queue_target_ready",
+      readyBefore: readyBefore.count,
+      readyAfter: readyBefore.count,
+      requested: 0,
+      sourced: 0,
+      found: 0,
+      inserted: 0,
+      rejected: 0,
+      duplicate: 0,
+      finder: null,
+      prospectSourcing: null,
+    };
+  }
+
+  const requested = clampInt(
+    Math.max(missing, missing * OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER, OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR),
+    missing,
+    1,
+    Math.max(1, input.maxSourceNow)
+  );
+  const prepared = await prepareOutboxContacts({
+    brandId: input.brandId,
+    brandName: "",
+    brandWebsite: "",
+    senderAccountId: input.senderAccountId,
+    batchName: input.batchName,
+    sourceMode: "auto",
+    prospectQuery: input.targetAudience,
+    prospectOffer: input.offer,
+    maxProspects: requested,
+  });
+  const deduped = await filterRecentOutboxRecipients({
+    brandId: input.brandId,
+    contacts: prepared.accepted,
+  });
+  const inserted = await insertQueuedOutboxContacts({
+    brandId: input.brandId,
+    contacts: deduped.accepted,
+    sourceQuery: input.targetAudience,
+    offer: input.offer,
+    ttlDays: input.ttlDays,
+  });
+  const readyAfter = inserted.available ? await countEligibleQueuedProspects(input.brandId) : readyBefore;
+  return {
+    available: inserted.available,
+    skipped: false,
+    reason: inserted.reason,
+    readyBefore: readyBefore.count,
+    readyAfter: readyAfter.count,
+    requested,
+    sourced: prepared.prospectSourcing?.sourced ?? 0,
+    found: prepared.accepted.length,
+    inserted: inserted.inserted,
+    rejected: prepared.rejected.length + deduped.rejected.length,
+    duplicate: inserted.duplicate,
+    finder: prepared.finder,
+    prospectSourcing: prepared.prospectSourcing,
+  };
+}
+
 async function filterRecentOutboxRecipients(input: {
   brandId: string;
   contacts: OutboxPreparedContact[];
@@ -1826,9 +2271,10 @@ export async function listOutboxBatches(brandId: string, limit = 25): Promise<Ou
 }
 
 export async function getOutboxConsoleState(brandId: string, preferredSenderAccountId = ""): Promise<OutboxConsoleState> {
-  const [batches, senders] = await Promise.all([
+  const [batches, senders, queue] = await Promise.all([
     listOutboxBatches(brandId),
     senderOptionsForBrand(brandId),
+    countEligibleQueuedProspects(brandId),
   ]);
   const selectedSender = (
     preferredSenderAccountId
@@ -1845,6 +2291,11 @@ export async function getOutboxConsoleState(brandId: string, preferredSenderAcco
     selectedPolicy,
     outboundSendingEnabled: outboundSendingEnabled(),
     maxBatchContacts: MAX_OUTBOX_BATCH_CONTACTS,
+    queue: {
+      available: queue.available,
+      ready: queue.count,
+      reason: queue.reason,
+    },
   };
 }
 
@@ -1872,19 +2323,27 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     secrets: await getOutreachAccountSecrets(account.id),
   });
 
-  const prepared = await prepareOutboxContacts({
-    brandId: input.brandId,
-    brandName: brand.name,
-    brandWebsite: brand.website,
-    senderAccountId,
-    batchName,
-    sourceMode,
-    contactsText: input.contactsText,
-    finderText: input.finderText,
-    prospectQuery: input.prospectQuery,
-    prospectOffer: input.prospectOffer || subject,
-    maxProspects: input.maxProspects,
-  });
+  const prepared =
+    input.preparedContacts?.length
+      ? {
+          accepted: input.preparedContacts,
+          rejected: [] as ManualBatchRejectedContact[],
+          finder: input.preparedFinder ?? null,
+          prospectSourcing: input.preparedProspectSourcing ?? null,
+        }
+      : await prepareOutboxContacts({
+          brandId: input.brandId,
+          brandName: brand.name,
+          brandWebsite: brand.website,
+          senderAccountId,
+          batchName,
+          sourceMode,
+          contactsText: input.contactsText,
+          finderText: input.finderText,
+          prospectQuery: input.prospectQuery,
+          prospectOffer: input.prospectOffer || subject,
+          maxProspects: input.maxProspects,
+        });
   if (!prepared.accepted.length) {
     throw new Error(
       prepared.rejected.length
@@ -2332,9 +2791,16 @@ export async function releaseOutboxHeldMessagesForBrand(
 
     for (const message of sendableMessages) {
       const lead = leadById.get(message.leadId) ?? null;
+      const queuedProspectId = queuedProspectIdFromMessage(message);
       if (!lead?.email) {
         failed += 1;
         await updateRunMessage(message.id, { status: "failed", lastError: "Lead email missing" });
+        await updateQueuedOutboxProspects([queuedProspectId], {
+          status: "failed",
+          reservedRunId: run.id,
+          reservedMessageId: message.id,
+          lastError: "Lead email missing",
+        });
         continue;
       }
       const send = await sendOutreachMessage({
@@ -2370,6 +2836,13 @@ export async function releaseOutboxHeldMessagesForBrand(
           generationMeta,
         });
         await updateRunLead(lead.id, { status: "sent" });
+        await updateQueuedOutboxProspects([queuedProspectId], {
+          status: "sent",
+          reservedRunId: run.id,
+          reservedMessageId: message.id,
+          sentAt,
+          lastError: "",
+        });
         await createOutreachEvent({
           runId: run.id,
           eventType: "outbox_held_message_sent",
@@ -2388,6 +2861,12 @@ export async function releaseOutboxHeldMessagesForBrand(
           status: "failed",
           lastError: send.error,
           generationMeta,
+        });
+        await updateQueuedOutboxProspects([queuedProspectId], {
+          status: "failed",
+          reservedRunId: run.id,
+          reservedMessageId: message.id,
+          lastError: send.error,
         });
         await createOutreachEvent({
           runId: run.id,
@@ -2420,6 +2899,52 @@ export async function releaseOutboxHeldMessagesForBrand(
   };
 }
 
+async function markQueuedProspectsAfterLaunch(
+  prospects: OutboxQueuedProspect[],
+  launch: OutboxLaunchResult
+) {
+  if (!prospects.length) return;
+  const leads = await listRunLeads(launch.run.id).catch(() => []);
+  const leadByEmail = new Map(leads.map((lead) => [lead.email.trim().toLowerCase(), lead] as const));
+  const messages = launch.messages;
+  for (const prospect of prospects) {
+    const lead = leadByEmail.get(prospect.emailNormalized) ?? null;
+    const message = lead ? messages.find((candidate) => candidate.leadId === lead.id) ?? null : null;
+    if (!message) {
+      await updateQueuedOutboxProspects([prospect.id], {
+        status: "rejected",
+        reservedRunId: launch.run.id,
+        rejectedReason: "not_in_launched_batch",
+      });
+      continue;
+    }
+    const status: OutboxProspectQueueStatus =
+      message.status === "sent" || message.status === "replied"
+        ? "sent"
+        : message.status === "scheduled"
+          ? "held"
+          : message.status === "failed" || message.status === "bounced"
+            ? "failed"
+            : "reserved";
+    await updateQueuedOutboxProspects([prospect.id], {
+      status,
+      reservedRunId: launch.run.id,
+      reservedMessageId: message.id,
+      sentAt: message.sentAt || null,
+      lastError: message.lastError,
+      rejectedReason: status === "failed" ? message.lastError : "",
+    });
+  }
+}
+
+async function releaseQueuedProspectReservation(prospects: OutboxQueuedProspect[], reason: string) {
+  if (!prospects.length) return;
+  await updateQueuedOutboxProspects(prospects.map((prospect) => prospect.id), {
+    status: "eligible",
+    lastError: compactText(reason, 500),
+  });
+}
+
 export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilotTickResult> {
   const enabled = outboxAutopilotEnabled();
   if (!enabled) {
@@ -2441,6 +2966,23 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
   const senderAccountId = outboxEnvText("OUTBOX_AUTOPILOT_SENDER_ACCOUNT_ID", 120);
   const maxProspects = outboxEnvNumber("OUTBOX_AUTOPILOT_MAX_PROSPECTS", 50, 1, 100);
   const requestedSendNow = outboxEnvNumber("OUTBOX_AUTOPILOT_REQUESTED_SEND_NOW", 25, 0, 100);
+  const queueEnabled = !outboxEnvFlag("OUTBOX_AUTOPILOT_QUEUE_DISABLED");
+  const queueTargetReady = outboxEnvNumber(
+    "OUTBOX_AUTOPILOT_QUEUE_TARGET_READY",
+    DEFAULT_OUTBOX_QUEUE_TARGET_READY,
+    1,
+    1000
+  );
+  const queueMaxSourceNow = outboxEnvNumber(
+    "OUTBOX_AUTOPILOT_QUEUE_MAX_SOURCE_PER_TICK",
+    Math.max(
+      OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR,
+      Math.min(100, maxProspects * OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER)
+    ),
+    1,
+    200
+  );
+  const queueTtlDays = outboxEnvNumber("OUTBOX_AUTOPILOT_QUEUE_TTL_DAYS", DEFAULT_OUTBOX_QUEUE_TTL_DAYS, 1, 365);
   const cooldownHours = outboxEnvNumber(
     "OUTBOX_AUTOPILOT_MIN_HOURS_BETWEEN_BATCHES",
     DEFAULT_OUTBOX_AUTOPILOT_COOLDOWN_HOURS,
@@ -2485,19 +3027,6 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         continue;
       }
 
-      const latestBatch = (await listOutboxBatches(brand.id, 1))[0] ?? null;
-      const latestCreatedAtMs = latestBatch ? Date.parse(latestBatch.run.createdAt) : 0;
-      const cooldownMs = cooldownHours * 60 * 60 * 1000;
-      if (Number.isFinite(latestCreatedAtMs) && latestCreatedAtMs > 0 && Date.now() - latestCreatedAtMs < cooldownMs) {
-        results.push(outboxAutopilotSkip({
-          brand,
-          reason: "cooldown_active",
-          senderAccountId,
-          cooldownHours,
-        }));
-        continue;
-      }
-
       if (!outboundSendingEnabled()) {
         results.push(outboxAutopilotSkip({
           brand,
@@ -2527,20 +3056,140 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
       }
       const selectedSender = senderChoice.choice.sender;
       const policy = senderChoice.choice.policy;
+      const targetAudience = configuredTargetAudience || defaultOutboxAutopilotTargetAudience(brand);
+      const offer = brand.product || brand.name;
+      const batchName = configuredBatchName || `Autopilot ${new Date().toLocaleDateString("en-US")}`;
+      let queueFill: OutboxQueueFillResult | null = null;
+
+      if (queueEnabled) {
+        try {
+          queueFill = await fillOutboxProspectQueueForBrand({
+            brandId: brand.id,
+            senderAccountId: selectedSender.accountId,
+            batchName,
+            targetAudience,
+            offer,
+            targetReady: queueTargetReady,
+            maxSourceNow: queueMaxSourceNow,
+            ttlDays: queueTtlDays,
+          });
+        } catch (error) {
+          const ready = await countEligibleQueuedProspects(brand.id);
+          queueFill = {
+            available: ready.available,
+            skipped: false,
+            reason: error instanceof Error ? error.message : "queue_fill_failed",
+            readyBefore: ready.count,
+            readyAfter: ready.count,
+            requested: 0,
+            sourced: 0,
+            found: 0,
+            inserted: 0,
+            rejected: 0,
+            duplicate: 0,
+            finder: null,
+            prospectSourcing: null,
+          };
+        }
+      }
+
       if (policy.availableNow <= 0) {
         const reason =
           policy.reasons[0] ||
           `sender_capacity_unavailable:${policy.senderState}:sent_today_${policy.sentToday}:daily_cap_${policy.dailyCap}:available_now_${policy.availableNow}`;
-        results.push(outboxAutopilotSkip({
+        const skip = outboxAutopilotSkip({
           brand,
           reason,
           senderAccountId: selectedSender.accountId,
           cooldownHours,
-        }));
+        });
+        skip.queueAvailable = queueFill?.available;
+        skip.queueReady = queueFill?.readyAfter;
+        skip.queueInserted = queueFill?.inserted;
+        skip.queueReason = queueFill?.reason;
+        results.push(skip);
         continue;
       }
 
       const launchSendNow = Math.min(requestedSendNow || 25, policy.availableNow);
+      if (queueEnabled && queueFill?.available) {
+        const reservation = await reserveQueuedOutboxProspects({
+          brandId: brand.id,
+          limit: launchSendNow,
+        });
+        if (reservation.contacts.length > 0) {
+          try {
+            const launch = await launchOutboxBatch({
+              brandId: brand.id,
+              senderAccountId: selectedSender.accountId,
+              batchName,
+              sourceMode: "auto",
+              prospectQuery: targetAudience,
+              prospectOffer: offer,
+              maxProspects: reservation.contacts.length,
+              subject: "",
+              body: "",
+              requestedSendNow: reservation.contacts.length,
+              timezone,
+              preparedContacts: reservation.contacts,
+              preparedFinder: null,
+              preparedProspectSourcing: queueFill.prospectSourcing,
+            });
+            await markQueuedProspectsAfterLaunch(reservation.prospects, launch);
+            results.push({
+              brandId: brand.id,
+              brandName: brand.name,
+              action: "launch",
+              reason: "queued_prospect_batch_launched",
+              senderAccountId: selectedSender.accountId,
+              sent: launch.counts.sent,
+              held: launch.counts.held,
+              failed: launch.counts.failed,
+              sourced: queueFill.sourced,
+              found: launch.counts.found,
+              batchId: launch.batchId,
+              cooldownHours,
+              queueAvailable: true,
+              queueReady: Math.max(0, queueFill.readyAfter - reservation.contacts.length),
+              queueInserted: queueFill.inserted,
+              queueReserved: reservation.contacts.length,
+              queueReason: queueFill.reason || reservation.reason,
+            });
+            continue;
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : "queued_launch_failed";
+            if (/dedupe|duplicate_recent_outbox_recipient|no sendable contacts after dedupe/i.test(reason)) {
+              await updateQueuedOutboxProspects(reservation.prospects.map((prospect) => prospect.id), {
+                status: "rejected",
+                rejectedReason: compactText(reason, 500),
+                lastError: compactText(reason, 500),
+              });
+            } else {
+              await releaseQueuedProspectReservation(reservation.prospects, reason);
+            }
+            throw error;
+          }
+        }
+      }
+
+      const latestBatch = (await listOutboxBatches(brand.id, 1))[0] ?? null;
+      const latestCreatedAtMs = latestBatch ? Date.parse(latestBatch.run.createdAt) : 0;
+      const cooldownMs = cooldownHours * 60 * 60 * 1000;
+      if (Number.isFinite(latestCreatedAtMs) && latestCreatedAtMs > 0 && Date.now() - latestCreatedAtMs < cooldownMs) {
+        const skip = outboxAutopilotSkip({
+          brand,
+          reason: "cooldown_active",
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        });
+        skip.queueAvailable = queueFill?.available;
+        skip.queueReady = queueFill?.readyAfter;
+        skip.queueInserted = queueFill?.inserted;
+        skip.queueReason = queueFill?.reason || "queue_empty_or_unavailable";
+        results.push(skip);
+        continue;
+      }
+
       const launchMaxProspects = outboxAutopilotProspectRequestSize({
         maxProspects,
         sendNow: launchSendNow,
@@ -2549,10 +3198,10 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
       const launch = await launchOutboxBatch({
         brandId: brand.id,
         senderAccountId: selectedSender.accountId,
-        batchName: configuredBatchName || `Autopilot ${new Date().toLocaleDateString("en-US")}`,
+        batchName,
         sourceMode: "auto",
-        prospectQuery: configuredTargetAudience || defaultOutboxAutopilotTargetAudience(brand),
-        prospectOffer: brand.product || brand.name,
+        prospectQuery: targetAudience,
+        prospectOffer: offer,
         maxProspects: launchMaxProspects,
         subject: "",
         body: "",
@@ -2572,6 +3221,11 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         found: launch.counts.found,
         batchId: launch.batchId,
         cooldownHours,
+        queueAvailable: queueFill?.available,
+        queueReady: queueFill?.readyAfter,
+        queueInserted: queueFill?.inserted,
+        queueReserved: 0,
+        queueReason: queueFill?.reason || "legacy_live_source_fallback",
       });
     } catch (error) {
       results.push({

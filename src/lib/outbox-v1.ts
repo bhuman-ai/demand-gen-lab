@@ -35,6 +35,7 @@ import {
 import {
   getOutreachAccountFromEmail,
   getOutreachAccountReplyToEmail,
+  isOutreachOutboundEnabled,
   supportsAnyDelivery,
   supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
@@ -1331,7 +1332,7 @@ async function filterRecentOutboxRecipients(input: {
   if (supabase && emails.length > 0) {
     const { data, error } = await supabase
       .from("demanddev_outreach_messages")
-      .select("to_email,lead_id,status,created_at,sent_at")
+      .select("lead_id,status,created_at,sent_at")
       .eq("brand_id", input.brandId)
       .in("status", ["scheduled", "sent", "replied"])
       .gte("created_at", daysAgoIso(OUTBOX_RECENT_RECIPIENT_DEDUPE_DAYS))
@@ -1364,13 +1365,8 @@ async function filterRecentOutboxRecipients(input: {
       for (const row of data ?? []) {
         const record = row as Record<string, unknown>;
         const leadId = String(record.lead_id ?? "").trim();
-        const candidates = [
-          String(record.to_email ?? "").trim().toLowerCase(),
-          leadEmailById.get(leadId) ?? "",
-        ];
-        for (const email of candidates) {
-          if (email) recentEmails.add(email);
-        }
+        const email = leadEmailById.get(leadId) ?? "";
+        if (email) recentEmails.add(email);
       }
     }
   }
@@ -1439,6 +1435,7 @@ function outboxSenderReadiness(input: {
 }) {
   return [
     input.account.status === "active" ? "" : "Account inactive",
+    isOutreachOutboundEnabled(input.account) ? "" : "Sender outbound is disabled",
     outboxSenderDeliveryReason(input.account, input.secrets),
     input.replyToEmail ? "" : "Reply-To email missing",
   ].filter(Boolean);
@@ -1587,7 +1584,9 @@ async function policyForSender(input: {
   let senderState: OutboxPolicyDecision["senderState"] = "warming";
   if (canonicalState === "ready") senderState = "healthy";
   if (canonicalState === "restricted") senderState = "constrained";
-  if (canonicalState === "blocked" || canonicalState === "retired") senderState = "paused";
+  if (canonicalState === "blocked" || canonicalState === "retired" || canonicalState === "provisioning") {
+    senderState = "paused";
+  }
   if (input.account.status !== "active") {
     senderState = "paused";
     reasons.push("sender_inactive");

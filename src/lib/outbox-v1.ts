@@ -1,4 +1,5 @@
-import { getBrandById, listBrands } from "@/lib/factory-data";
+import { createHash } from "crypto";
+import { createId, getBrandById, listBrands } from "@/lib/factory-data";
 import {
   createExperimentRecord,
   createScaleCampaignRecordFromExperiment,
@@ -18,13 +19,16 @@ import {
   createOutreachEvent,
   createOutreachRun,
   createRunMessages,
+  enqueueOutreachJob,
   getBrandOutreachAssignment,
   getOutreachAccount,
   getOutreachAccountSecrets,
   type OutreachAccountSecrets,
   listBrandRuns,
+  listDeliverabilityProbeRuns,
   listOutreachAccounts,
   listReplyThreadsByBrand,
+  listRunJobs,
   listRunLeads,
   listRunMessages,
   updateOutreachRun,
@@ -72,6 +76,11 @@ const DEFAULT_OUTBOX_MESSAGE_EXPERIMENT_MODEL = "openai/gpt-5.5";
 const OUTBOX_PROSPECT_QUEUE_TABLE = "demanddev_outbox_prospect_queue";
 const DEFAULT_OUTBOX_QUEUE_TARGET_READY = 100;
 const DEFAULT_OUTBOX_QUEUE_TTL_DAYS = 45;
+const OUTBOX_PLACEMENT_EVIDENCE_TTL_HOURS = 48;
+const OUTBOX_PLACEMENT_CANARY_SEND_NOW = 3;
+const OUTBOX_PLACEMENT_BLOCK_SPAM_RATE = 0.5;
+const OUTBOX_PLACEMENT_PROBE_COOLDOWN_HOURS = 12;
+const OUTBOX_PLACEMENT_PROBE_MAX_ATTEMPTS = 5;
 
 const EMPTY_OUTREACH_ACCOUNT_SECRETS: OutreachAccountSecrets = {
   customerIoApiKey: "",
@@ -200,6 +209,31 @@ export type OutboxPolicyDecision = {
   hold: number;
   reject: number;
   reasons: string[];
+  placement: OutboxPlacementDecision;
+};
+
+export type OutboxPlacementDecision = {
+  state: "fresh_inbox" | "fresh_mixed" | "fresh_bad" | "pending" | "stale_or_missing";
+  action: "scale" | "canary" | "pause";
+  reason: string;
+  latestProbeRunId: string;
+  latestProbeStatus: string;
+  latestProbeAt: string;
+  latestProbeAgeHours: number;
+  placement: string;
+  inboxCount: number;
+  spamCount: number;
+  allMailOnlyCount: number;
+  notFoundCount: number;
+  errorCount: number;
+  totalMonitors: number;
+  inboxRate: number;
+  spamRate: number;
+  summaryText: string;
+  lastError: string;
+  evidenceTtlHours: number;
+  canarySendNow: number;
+  probeRequired: boolean;
 };
 
 export type OutboxBatchSummary = {
@@ -446,6 +480,19 @@ function outboxAutopilotProspectRequestSize(input: { maxProspects: number; sendN
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function outboxContentHash(subject: string, body: string) {
+  return createHash("sha256").update(subject).update("\n\n").update(body).digest("hex");
+}
+
+function outboxProbeToken() {
+  return createId("probe");
 }
 
 function asArray(value: unknown): unknown[] {
@@ -2036,15 +2083,200 @@ async function senderMessageWindowStats(account: OutreachAccount) {
   };
 }
 
+function normalizePlacementCounts(probe: {
+  counts?: Record<string, unknown>;
+  totalMonitors?: number;
+  placement?: string;
+}) {
+  const counts = asRecord(probe.counts);
+  const normalized = {
+    inbox: asNumber(counts.inbox),
+    spam: asNumber(counts.spam),
+    allMailOnly: asNumber(counts.all_mail_only ?? counts.allMailOnly),
+    notFound: asNumber(counts.not_found ?? counts.notFound),
+    error: asNumber(counts.error),
+  };
+  let total = asNumber(probe.totalMonitors);
+  if (total <= 0) {
+    total =
+      normalized.inbox +
+      normalized.spam +
+      normalized.allMailOnly +
+      normalized.notFound +
+      normalized.error;
+  }
+  if (total <= 0 && probe.placement) {
+    total = 1;
+    if (probe.placement === "inbox") normalized.inbox = 1;
+    else if (probe.placement === "spam") normalized.spam = 1;
+    else if (probe.placement === "all_mail_only") normalized.allMailOnly = 1;
+    else if (probe.placement === "not_found") normalized.notFound = 1;
+    else normalized.error = 1;
+  }
+  return { counts: normalized, total };
+}
+
+function outboxProbeReferenceTime(probe: { completedAt?: string; updatedAt?: string; createdAt?: string }) {
+  return String(probe.completedAt || probe.updatedAt || probe.createdAt || "").trim();
+}
+
+function ageHoursSince(value: string) {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(0, (Date.now() - parsed) / (60 * 60 * 1000));
+}
+
+async function resolveOutboxPlacementDecision(input: {
+  brandId: string;
+  account: OutreachAccount;
+}): Promise<OutboxPlacementDecision> {
+  const fromEmail = getOutreachAccountFromEmail(input.account).trim().toLowerCase();
+  const empty: OutboxPlacementDecision = {
+    state: "stale_or_missing",
+    action: "canary",
+    reason: "placement_no_sender_identity",
+    latestProbeRunId: "",
+    latestProbeStatus: "",
+    latestProbeAt: "",
+    latestProbeAgeHours: 0,
+    placement: "unknown",
+    inboxCount: 0,
+    spamCount: 0,
+    allMailOnlyCount: 0,
+    notFoundCount: 0,
+    errorCount: 0,
+    totalMonitors: 0,
+    inboxRate: 0,
+    spamRate: 0,
+    summaryText: "",
+    lastError: "",
+    evidenceTtlHours: OUTBOX_PLACEMENT_EVIDENCE_TTL_HOURS,
+    canarySendNow: OUTBOX_PLACEMENT_CANARY_SEND_NOW,
+    probeRequired: true,
+  };
+  if (!input.account.id || !fromEmail) return empty;
+
+  const probes = await listDeliverabilityProbeRuns({
+    brandId: input.brandId,
+    senderAccountId: input.account.id,
+    fromEmail,
+    probeVariant: "production",
+    statuses: ["queued", "sent", "waiting", "completed", "failed"],
+    limit: 25,
+  }).catch(() => []);
+  const latestProbe = probes[0] ?? null;
+  const activeProbe = probes.find((probe) => {
+    if (!["queued", "sent", "waiting"].includes(probe.status)) return false;
+    return ageHoursSince(outboxProbeReferenceTime(probe)) <= OUTBOX_PLACEMENT_EVIDENCE_TTL_HOURS;
+  }) ?? null;
+  const completedProbe = probes.find((probe) => probe.status === "completed" && probe.totalMonitors > 0) ?? null;
+
+  if (activeProbe) {
+    const checkedAt = outboxProbeReferenceTime(activeProbe);
+    return {
+      ...empty,
+      state: "pending",
+      action: "canary",
+      reason: "placement_probe_pending",
+      latestProbeRunId: activeProbe.id,
+      latestProbeStatus: activeProbe.status,
+      latestProbeAt: checkedAt,
+      latestProbeAgeHours: Math.round(ageHoursSince(checkedAt) * 10) / 10,
+      placement: activeProbe.placement || "unknown",
+      summaryText: activeProbe.summaryText,
+      lastError: activeProbe.lastError,
+      probeRequired: false,
+    };
+  }
+
+  if (!completedProbe) {
+    const checkedAt = latestProbe ? outboxProbeReferenceTime(latestProbe) : "";
+    return {
+      ...empty,
+      reason: latestProbe?.lastError ? "placement_latest_probe_failed" : "placement_no_completed_probe",
+      latestProbeRunId: latestProbe?.id ?? "",
+      latestProbeStatus: latestProbe?.status ?? "",
+      latestProbeAt: checkedAt,
+      latestProbeAgeHours: checkedAt ? Math.round(ageHoursSince(checkedAt) * 10) / 10 : 0,
+      placement: latestProbe?.placement || "unknown",
+      summaryText: latestProbe?.summaryText ?? "",
+      lastError: latestProbe?.lastError ?? "",
+    };
+  }
+
+  const checkedAt = outboxProbeReferenceTime(completedProbe);
+  const latestProbeAgeHours = ageHoursSince(checkedAt);
+  const { counts, total } = normalizePlacementCounts(completedProbe);
+  const inboxRate = total > 0 ? counts.inbox / total : 0;
+  const spamRate = total > 0 ? counts.spam / total : 0;
+  const base = {
+    ...empty,
+    latestProbeRunId: completedProbe.id,
+    latestProbeStatus: completedProbe.status,
+    latestProbeAt: checkedAt,
+    latestProbeAgeHours: Math.round(latestProbeAgeHours * 10) / 10,
+    placement: completedProbe.placement || "unknown",
+    inboxCount: counts.inbox,
+    spamCount: counts.spam,
+    allMailOnlyCount: counts.allMailOnly,
+    notFoundCount: counts.notFound,
+    errorCount: counts.error,
+    totalMonitors: total,
+    inboxRate,
+    spamRate,
+    summaryText: completedProbe.summaryText,
+    lastError: completedProbe.lastError,
+  } satisfies OutboxPlacementDecision;
+
+  if (latestProbeAgeHours > OUTBOX_PLACEMENT_EVIDENCE_TTL_HOURS) {
+    return {
+      ...base,
+      state: "stale_or_missing",
+      action: "canary",
+      reason: "placement_evidence_stale",
+      probeRequired: true,
+    };
+  }
+
+  if (total > 0 && spamRate >= OUTBOX_PLACEMENT_BLOCK_SPAM_RATE) {
+    return {
+      ...base,
+      state: "fresh_bad",
+      action: "pause",
+      reason: "placement_spam_heavy",
+      probeRequired: false,
+    };
+  }
+
+  if (counts.spam > 0 || counts.allMailOnly > 0 || counts.notFound > 0 || counts.error > 0) {
+    return {
+      ...base,
+      state: "fresh_mixed",
+      action: "canary",
+      reason: "placement_mixed",
+      probeRequired: true,
+    };
+  }
+
+  return {
+    ...base,
+    state: "fresh_inbox",
+    action: "scale",
+    reason: "placement_fresh_inbox",
+    probeRequired: false,
+  };
+}
+
 async function policyForSender(input: {
   brandId: string;
   account: OutreachAccount;
   requestedContacts?: number;
   requestedSendNow?: number;
 }): Promise<OutboxPolicyDecision> {
-  const [canonicalPool, stats] = await Promise.all([
+  const [canonicalPool, stats, placement] = await Promise.all([
     getCanonicalSenderPoolForBrand(input.brandId).catch(() => null),
     senderMessageWindowStats(input.account),
+    resolveOutboxPlacementDecision({ brandId: input.brandId, account: input.account }),
   ]);
   const canonicalSender = canonicalPool?.senderByAccountId.get(input.account.id) ?? null;
   const canonicalState = String(canonicalSender?.state ?? "").trim();
@@ -2084,7 +2316,14 @@ async function policyForSender(input: {
     canonicalSender?.hourlyCap && canonicalSender.hourlyCap > 0
       ? canonicalSender.hourlyCap
       : Math.min(DEFAULT_HOURLY_CAP, dailyCap || DEFAULT_HOURLY_CAP);
-  const availableNow = Math.max(0, Math.min(dailyCap - stats.sentToday, hourlyCap - stats.sentThisHour));
+  const rawAvailableNow = Math.max(0, Math.min(dailyCap - stats.sentToday, hourlyCap - stats.sentThisHour));
+  const placementAvailableNow =
+    placement.action === "pause"
+      ? 0
+      : placement.action === "canary"
+        ? Math.min(rawAvailableNow, placement.canarySendNow)
+        : rawAvailableNow;
+  const availableNow = Math.max(0, placementAvailableNow);
   const requestedContacts = Math.max(0, Math.round(Number(input.requestedContacts ?? 0) || 0));
   const requestedSendNow =
     input.requestedSendNow === undefined
@@ -2092,7 +2331,12 @@ async function policyForSender(input: {
       : Math.max(0, Math.round(Number(input.requestedSendNow) || 0));
   const sendNow = Math.max(0, Math.min(requestedContacts, requestedSendNow, availableNow));
   const hold = Math.max(0, requestedContacts - sendNow);
-  if (hold > 0 && availableNow <= 0 && senderState !== "paused") reasons.push("daily_or_hourly_cap_exhausted");
+  if (placement.action === "pause") {
+    reasons.push(placement.reason);
+  } else if (placement.action === "canary" && requestedSendNow > availableNow) {
+    reasons.push(placement.reason);
+  }
+  if (hold > 0 && rawAvailableNow <= 0 && senderState !== "paused") reasons.push("daily_or_hourly_cap_exhausted");
   if (hold > 0 && sendNow > 0) reasons.push("batch_exceeds_current_sender_cap");
 
   return {
@@ -2107,7 +2351,121 @@ async function policyForSender(input: {
     hold,
     reject: 0,
     reasons,
+    placement,
   };
+}
+
+async function enqueueOutboxPlacementProbe(input: {
+  run: OutreachRun;
+  message: OutreachMessage;
+  account: OutreachAccount;
+  batchId: string;
+  sourceMessageStatus: string;
+  triggerStage: "outbox_initial_send" | "outbox_held_release";
+}) {
+  const fromEmail = getOutreachAccountFromEmail(input.account).trim().toLowerCase();
+  const contentHash = outboxContentHash(input.message.subject, input.message.body);
+  const now = nowIso();
+  const jobs = await listRunJobs(input.run.id, 50).catch(() => []);
+  const activeJob = jobs.find((job) => {
+    if (job.jobType !== "monitor_deliverability" || !["queued", "running"].includes(job.status)) return false;
+    const payload = asRecord(job.payload);
+    const probeVariant = String(payload.probeVariant ?? "production").trim().toLowerCase() || "production";
+    if (probeVariant !== "production") return false;
+    const senderAccountId = String(payload.senderAccountId ?? "").trim();
+    const payloadFromEmail = String(payload.fromEmail ?? "").trim().toLowerCase();
+    const sourceMessageId = String(payload.sourceMessageId ?? "").trim();
+    const payloadContentHash = String(payload.contentHash ?? "").trim();
+    if (senderAccountId && senderAccountId !== input.account.id) return false;
+    if (payloadFromEmail && payloadFromEmail !== fromEmail) return false;
+    return sourceMessageId === input.message.id || payloadContentHash === contentHash;
+  });
+  if (activeJob) {
+    return { job: activeJob, skipped: true, reason: "placement_probe_already_active" };
+  }
+
+  const recentProbe = (await listDeliverabilityProbeRuns({
+    runId: input.run.id,
+    senderAccountId: input.account.id,
+    fromEmail,
+    probeVariant: "production",
+    statuses: ["queued", "sent", "waiting", "completed", "failed"],
+    limit: 25,
+  }).catch(() => []))
+    .find((probe) => {
+      if (probe.sourceMessageId !== input.message.id && probe.contentHash !== contentHash) return false;
+      return ageHoursSince(outboxProbeReferenceTime(probe)) < OUTBOX_PLACEMENT_PROBE_COOLDOWN_HOURS;
+    });
+  if (recentProbe) {
+    return { job: null, skipped: true, reason: "placement_probe_recent", recentProbe };
+  }
+
+  const job = await enqueueOutreachJob({
+    runId: input.run.id,
+    jobType: "monitor_deliverability",
+    executeAfter: now,
+    maxAttempts: OUTBOX_PLACEMENT_PROBE_MAX_ATTEMPTS,
+    payload: {
+      source: "outbox_v1",
+      reason: "Outbox requires exact-copy inbox placement evidence before scale.",
+      stage: "send",
+      triggerStage: input.triggerStage,
+      probeToken: outboxProbeToken(),
+      probeVariant: "production",
+      sourceMessageId: input.message.id,
+      sourceMessageStatus: input.sourceMessageStatus,
+      sourceType: input.message.sourceType,
+      nodeId: input.message.nodeId,
+      leadId: input.message.leadId,
+      contentHash,
+      senderAccountId: input.account.id,
+      senderAccountName: input.account.name,
+      fromEmail,
+      subject: input.message.subject,
+      batchId: input.batchId,
+    },
+  });
+  await createOutreachEvent({
+    runId: input.run.id,
+    eventType: "outbox_placement_probe_enqueued",
+    payload: {
+      batchId: input.batchId,
+      jobId: job.id,
+      messageId: input.message.id,
+      senderAccountId: input.account.id,
+      fromEmail,
+      contentHash,
+      triggerStage: input.triggerStage,
+    },
+  });
+  return { job, skipped: false, reason: "placement_probe_enqueued" };
+}
+
+async function tryEnqueueOutboxPlacementProbe(input: {
+  run: OutreachRun;
+  message: OutreachMessage;
+  account: OutreachAccount;
+  batchId: string;
+  sourceMessageStatus: string;
+  triggerStage: "outbox_initial_send" | "outbox_held_release";
+}) {
+  try {
+    return await enqueueOutboxPlacementProbe(input);
+  } catch (error) {
+    await createOutreachEvent({
+      runId: input.run.id,
+      eventType: "outbox_placement_probe_enqueue_failed",
+      payload: {
+        batchId: input.batchId,
+        messageId: input.message.id,
+        senderAccountId: input.account.id,
+        fromEmail: getOutreachAccountFromEmail(input.account).trim(),
+        triggerStage: input.triggerStage,
+        error: error instanceof Error ? error.message : "placement_probe_enqueue_failed",
+      },
+    }).catch(() => null);
+    return null;
+  }
 }
 
 async function chooseOutboxAutopilotSender(input: {
@@ -2498,6 +2856,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
   );
   const leadByEmail = new Map(leads.map((lead) => [lead.email.toLowerCase(), lead] as const));
   const scheduledAt = nowIso();
+  const holdReason = policy.reasons[0] ?? "sender_policy_cap";
   const messages = await createRunMessages(
     accepted.flatMap((contact, index) => {
       const lead = leadByEmail.get(contact.email.toLowerCase());
@@ -2520,7 +2879,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
           batchId,
           sourceMode: contact.sourceMode,
           selectedForImmediateSend,
-          holdReason: selectedForImmediateSend ? "" : "sender_policy_cap",
+          holdReason: selectedForImmediateSend ? "" : holdReason,
           originalSourceUrl: contact.originalSourceUrl,
           warnings: contact.warnings,
           finder: contact.finderMeta,
@@ -2555,6 +2914,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
 
   let sent = 0;
   let failed = 0;
+  let placementProbeQueued = false;
   const sendableMessages = messages.slice(0, policy.sendNow);
   for (const message of sendableMessages) {
     const lead = leads.find((candidate) => candidate.id === message.leadId) ?? null;
@@ -2605,6 +2965,17 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
           providerMessageId: send.providerMessageId,
         },
       });
+      if (!placementProbeQueued) {
+        await tryEnqueueOutboxPlacementProbe({
+          run,
+          message,
+          account,
+          batchId,
+          sourceMessageStatus: "sent",
+          triggerStage: "outbox_initial_send",
+        });
+        placementProbeQueued = true;
+      }
     } else {
       failed += 1;
       await updateRunMessage(message.id, {
@@ -2816,6 +3187,7 @@ export async function releaseOutboxHeldMessagesForBrand(
     const leadById = new Map(leads.map((lead) => [lead.id, lead] as const));
     const sendableMessages = messages.slice(0, policy.sendNow);
     const batchId = outboxRunBatchId(run);
+    let placementProbeQueuedForRun = false;
 
     for (const message of sendableMessages) {
       const lead = leadById.get(message.leadId) ?? null;
@@ -2883,6 +3255,17 @@ export async function releaseOutboxHeldMessagesForBrand(
             providerMessageId: send.providerMessageId,
           },
         });
+        if (!placementProbeQueuedForRun) {
+          await tryEnqueueOutboxPlacementProbe({
+            run,
+            message,
+            account,
+            batchId,
+            sourceMessageStatus: "sent",
+            triggerStage: "outbox_held_release",
+          });
+          placementProbeQueuedForRun = true;
+        }
       } else {
         failed += 1;
         await updateRunMessage(message.id, {

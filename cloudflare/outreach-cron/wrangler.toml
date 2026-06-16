@@ -6,5 +6,7 @@ compatibility_date = "2026-02-24"
 crons = ["*/5 * * * *"]
 
 [vars]
-# Set this to your deployed app URL.
-OUTREACH_TICK_URL = "https://www.lastb2b.com/api/internal/outreach/tick"
+# Split endpoints keep the clock alive even when the legacy combined tick is disabled.
+OUTBOX_AUTOPILOT_URL = "https://www.lastb2b.com/api/internal/outreach/outbox-autopilot"
+OUTREACH_OPS_TICK_URL = "https://www.lastb2b.com/api/internal/outreach/ops-tick"
+OUTREACH_OPS_TICK_EVERY_MINUTES = "15"

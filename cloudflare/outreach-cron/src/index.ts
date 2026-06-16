@@ -1,5 +1,8 @@
 type Env = {
-  OUTREACH_TICK_URL: string;
+  OUTREACH_TICK_URL?: string;
+  OUTBOX_AUTOPILOT_URL?: string;
+  OUTREACH_OPS_TICK_URL?: string;
+  OUTREACH_OPS_TICK_EVERY_MINUTES?: string;
   OUTREACH_CRON_TOKEN?: string;
   MANUAL_TRIGGER_TOKEN?: string;
 };
@@ -13,6 +16,7 @@ type WorkerExecutionContext = {
 };
 
 type TickResult = {
+  name: string;
   ok: boolean;
   status?: number;
   body?: unknown;
@@ -41,6 +45,15 @@ function parseJsonSafe(raw: string) {
   }
 }
 
+function positiveInt(value: unknown, fallback: number) {
+  const parsed = Math.round(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function shouldRunEveryMinutes(everyMinutes: number, date = new Date()) {
+  return date.getUTCMinutes() % everyMinutes === 0;
+}
+
 function isRetryableStatus(status: number) {
   return RETRYABLE_STATUSES.has(status);
 }
@@ -52,15 +65,21 @@ function isAuthorizedManual(request: Request, env: Env) {
   return header === `Bearer ${expected}`;
 }
 
-async function invokeOutreachTick(env: Env, source: string): Promise<TickResult> {
+async function invokeTickEndpoint(input: {
+  name: string;
+  url: string;
+  env: Env;
+  source: string;
+}): Promise<TickResult> {
   const started = nowMs();
-  const url = String(env.OUTREACH_TICK_URL ?? "").trim();
-  const token = String(env.OUTREACH_CRON_TOKEN ?? "").trim();
+  const url = input.url.trim();
+  const token = String(input.env.OUTREACH_CRON_TOKEN ?? "").trim();
 
   if (!url) {
     return {
+      name: input.name,
       ok: false,
-      error: "OUTREACH_TICK_URL is missing",
+      error: `${input.name} URL is missing`,
       attemptCount: 0,
       elapsedMs: nowMs() - started,
     };
@@ -76,7 +95,7 @@ async function invokeOutreachTick(env: Env, source: string): Promise<TickResult>
           "user-agent": "factory-outreach-cron-worker/1.0",
         },
         body: JSON.stringify({
-          source,
+          source: input.source,
           attempt,
           scheduledAt: new Date().toISOString(),
         }),
@@ -85,6 +104,7 @@ async function invokeOutreachTick(env: Env, source: string): Promise<TickResult>
       const raw = await response.text();
       if (response.ok) {
         return {
+          name: input.name,
           ok: true,
           status: response.status,
           body: parseJsonSafe(raw),
@@ -95,6 +115,7 @@ async function invokeOutreachTick(env: Env, source: string): Promise<TickResult>
 
       if (!isRetryableStatus(response.status) || attempt === MAX_ATTEMPTS) {
         return {
+          name: input.name,
           ok: false,
           status: response.status,
           body: parseJsonSafe(raw),
@@ -109,6 +130,7 @@ async function invokeOutreachTick(env: Env, source: string): Promise<TickResult>
       const message = error instanceof Error ? error.message : "Unknown fetch failure";
       if (attempt === MAX_ATTEMPTS) {
         return {
+          name: input.name,
           ok: false,
           error: message,
           attemptCount: attempt,
@@ -120,6 +142,7 @@ async function invokeOutreachTick(env: Env, source: string): Promise<TickResult>
   }
 
   return {
+    name: input.name,
     ok: false,
     error: "Tick failed after retries",
     attemptCount: MAX_ATTEMPTS,
@@ -127,12 +150,50 @@ async function invokeOutreachTick(env: Env, source: string): Promise<TickResult>
   };
 }
 
+function scheduledEndpoints(env: Env, source: string) {
+  const outboxUrl = String(env.OUTBOX_AUTOPILOT_URL ?? "").trim();
+  const opsUrl = String(env.OUTREACH_OPS_TICK_URL ?? "").trim();
+  const legacyUrl = String(env.OUTREACH_TICK_URL ?? "").trim();
+  const opsEveryMinutes = positiveInt(env.OUTREACH_OPS_TICK_EVERY_MINUTES, 15);
+  const endpoints: Array<{ name: string; url: string; source: string }> = [];
+
+  if (outboxUrl) {
+    endpoints.push({ name: "outbox_autopilot", url: outboxUrl, source });
+  }
+  if (opsUrl && shouldRunEveryMinutes(opsEveryMinutes)) {
+    endpoints.push({ name: "outreach_ops_tick", url: opsUrl, source });
+  }
+  if (!endpoints.length && legacyUrl) {
+    endpoints.push({ name: "legacy_outreach_tick", url: legacyUrl, source });
+  }
+  return endpoints;
+}
+
+async function invokeScheduledTicks(env: Env, source: string): Promise<TickResult[]> {
+  const endpoints = scheduledEndpoints(env, source);
+  if (!endpoints.length) {
+    return [{
+      name: "scheduler",
+      ok: false,
+      error: "No tick endpoint URLs are configured",
+      attemptCount: 0,
+      elapsedMs: 0,
+    }];
+  }
+
+  const results: TickResult[] = [];
+  for (const endpoint of endpoints) {
+    results.push(await invokeTickEndpoint({ ...endpoint, env }));
+  }
+  return results;
+}
+
 const worker = {
   async scheduled(event: ScheduledLikeEvent, env: Env, ctx: WorkerExecutionContext) {
     ctx.waitUntil(
       (async () => {
-        const result = await invokeOutreachTick(env, `cron:${event.cron}`);
-        console.log(JSON.stringify({ source: "scheduled", result }));
+        const results = await invokeScheduledTicks(env, `cron:${event.cron}`);
+        console.log(JSON.stringify({ source: "scheduled", results }));
       })()
     );
   },
@@ -159,8 +220,9 @@ const worker = {
         );
       }
 
-      const result = await invokeOutreachTick(env, "manual:/run");
-      return Response.json(result, { status: result.ok ? 200 : 500 });
+      const results = await invokeScheduledTicks(env, "manual:/run");
+      const ok = results.every((result) => result.ok);
+      return Response.json({ ok, results }, { status: ok ? 200 : 500 });
     }
 
     return Response.json(

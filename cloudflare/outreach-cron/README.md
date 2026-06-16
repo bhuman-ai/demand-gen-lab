@@ -1,10 +1,14 @@
 # Cloudflare Outreach Cron Worker
 
-This worker is the legacy combined scheduler. Leave `OUTREACH_COMBINED_TICK_ENABLED=false` when Vercel split crons are active, otherwise this duplicates dispatch/prep/ops work.
+This worker is the production scheduler for outreach split ticks. Leave `OUTREACH_COMBINED_TICK_ENABLED=false`; the worker calls the split endpoints directly instead of the disabled legacy combined tick.
 
-When enabled, it calls the app's combined operator tick:
+On every scheduled run it calls:
 
-- `POST /api/internal/outreach/tick`
+- `POST /api/internal/outreach/outbox-autopilot`
+
+Every 15 minutes it also calls:
+
+- `POST /api/internal/outreach/ops-tick`
 
 It runs every 5 minutes (`*/5 * * * *`) and supports a protected manual trigger endpoint. The app tick handles outreach dispatch, inbox sync, sendable prep, sender warmup/launch, deliverability supervision, and AI mission learning refreshes.
 
@@ -17,7 +21,7 @@ It runs every 5 minutes (`*/5 * * * *`) and supports a protected manual trigger 
 
 1. Set app env var on Vercel:
    - `OUTREACH_CRON_TOKEN` (required)
-2. Update `OUTREACH_TICK_URL` in `wrangler.toml` to your app domain.
+2. Update `OUTBOX_AUTOPILOT_URL` and `OUTREACH_OPS_TICK_URL` in `wrangler.toml` to your app domain.
 3. Deploy worker:
 
 ```bash

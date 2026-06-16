@@ -872,6 +872,14 @@ function buildAirscaleLeadFilters(input: {
   };
 }
 
+function airscaleLeadFinderPage() {
+  const explicit = Number(process.env.OUTBOX_AUTOPILOT_AIRSCALE_PAGE);
+  if (Number.isFinite(explicit) && explicit >= 0) return Math.trunc(explicit);
+  const maxPages = outboxEnvNumber("OUTBOX_AUTOPILOT_AIRSCALE_PAGE_ROTATION_SIZE", 10, 1, 50);
+  const windowMs = outboxEnvNumber("OUTBOX_AUTOPILOT_AIRSCALE_PAGE_ROTATION_MINUTES", 5, 1, 240) * 60 * 1000;
+  return Math.floor(Date.now() / windowMs) % maxPages;
+}
+
 function prospectFromAirscaleRow(row: Record<string, unknown>): OutboxSourcedProspect | null {
   const profile = asRecord(row.profile);
   const link = asRecord(row.link);
@@ -942,9 +950,10 @@ async function sourceOutboxProspectsFromAirscale(input: {
   if (!key) throw new Error("AIRSCALE_API_KEY is missing. Add it before using automatic Airscale prospect sourcing.");
   const maxProspects = Math.max(1, Math.min(100, Math.trunc(Number(input.maxProspects) || 25)));
   const filters = buildAirscaleLeadFilters({ targetAudience, offer });
+  const page = airscaleLeadFinderPage();
   const body = {
     filters,
-    page: 0,
+    page,
     size: maxProspects,
   };
   const response = await fetch(`${airscaleBaseUrl()}/v1/leads-finder`, {
@@ -990,7 +999,7 @@ async function sourceOutboxProspectsFromAirscale(input: {
       provider: "airscale",
       endpoint: "/v1/leads-finder",
       filters,
-      page: Number(payload.page ?? 0) || 0,
+      page: Number(payload.page ?? page) || page,
       size: Number(payload.size ?? maxProspects) || maxProspects,
     },
     creditsUsed,
@@ -1468,8 +1477,8 @@ async function prepareAirscaleOutboxContacts(input: {
         external_provider_fallback: true,
         external_providers: ["airscale"],
         max_credits: 1,
-        timeout_seconds: 12,
-        probe_timeout_seconds: 12,
+        timeout_seconds: 25,
+        probe_timeout_seconds: 25,
         stop_on_first_hit: true,
         stop_on_min_confidence: "high",
         local_fallback_on_risky: true,
@@ -2695,6 +2704,10 @@ function outboxAutopilotSkip(input: {
   };
 }
 
+function isNoSendableOutboxError(reason: string) {
+  return /no sendable contacts|no prospects were sourced|no sendable contacts after dedupe|no_prospects_found|this operation was aborted/i.test(reason);
+}
+
 function outboxRunBatchId(run: OutreachRun) {
   const externalRef = String(run.externalRef ?? "").trim();
   return externalRef.startsWith(OUTBOX_V1_EXTERNAL_REF_PREFIX)
@@ -3228,11 +3241,29 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         queueReason: queueFill?.reason || "legacy_live_source_fallback",
       });
     } catch (error) {
+      const reason = error instanceof Error ? error.message : "outbox_autopilot_failed";
+      if (isNoSendableOutboxError(reason)) {
+        results.push({
+          brandId: brand.id,
+          brandName: brand.name,
+          action: "skip",
+          reason,
+          senderAccountId,
+          sent: 0,
+          held: 0,
+          failed: 0,
+          sourced: 0,
+          found: 0,
+          batchId: "",
+          cooldownHours,
+        });
+        continue;
+      }
       results.push({
         brandId: brand.id,
         brandName: brand.name,
         action: "error",
-        reason: error instanceof Error ? error.message : "outbox_autopilot_failed",
+        reason,
         senderAccountId,
         sent: 0,
         held: 0,

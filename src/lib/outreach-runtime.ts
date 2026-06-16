@@ -266,6 +266,7 @@ const DEFAULT_CUSTOMER_IO_DELIVERABILITY_PROBE_MAX_POLLS = 8;
 const DELIVERABILITY_PROBE_REPEAT_HOURS = 24 * 7;
 const DEFAULT_DELIVERABILITY_RESERVED_STALE_MINUTES = 15;
 const DEFAULT_DELIVERABILITY_PROBE_MAX_MONITORS = 3;
+const DEFAULT_DELIVERABILITY_MONITOR_REUSE_COOLDOWN_DAYS = 14;
 const DELIVERABILITY_INTELLIGENCE_REFRESH_HOURS = 6;
 const SELFFUNDED_AWS_APPLICATION_URL = "https://www.selffunded.dev/aws-credits/apply";
 const DEFAULT_OUTBOUND_LEAD_QUALITY_POLICY: LeadQualityPolicy = {
@@ -14058,6 +14059,21 @@ function deliverabilityProbeMaxMonitors() {
   );
 }
 
+function deliverabilityMonitorReuseCooldownDays() {
+  return Math.max(
+    1,
+    Math.min(
+      90,
+      Math.round(
+        Number(
+          process.env.DELIVERABILITY_MONITOR_REUSE_COOLDOWN_DAYS ??
+            DEFAULT_DELIVERABILITY_MONITOR_REUSE_COOLDOWN_DAYS
+        ) || DEFAULT_DELIVERABILITY_MONITOR_REUSE_COOLDOWN_DAYS
+      )
+    )
+  );
+}
+
 function deliverabilityProbeMaxPollsForSender(account: OutreachAccount) {
   const envKey =
     account.provider === "customerio"
@@ -14356,6 +14372,7 @@ async function listBlockedMonitorEmailsForSender(input: {
   const senderAccountId = input.senderAccountId.trim();
   const fromEmail = input.fromEmail.trim().toLowerCase();
   const fromDomain = senderDomainFromEmail(fromEmail);
+  const reusableBeforeMs = Date.now() - deliverabilityMonitorReuseCooldownDays() * DAY_MS;
   const blocked = new Set<string>();
   for (const reservation of reservations) {
     const reservationSenderAccountId = reservation.senderAccountId.trim();
@@ -14371,6 +14388,17 @@ async function listBlockedMonitorEmailsForSender(input: {
       Boolean(reservation.providerMessageId.trim()) ||
       reservation.releasedReason.trim() === "probe_completed";
     if (!matchesSender || !mayHaveSeenSender) continue;
+    if (reservation.status !== "reserved") {
+      const lastUseMs = Math.max(
+        toDate(reservation.consumedAt).getTime(),
+        toDate(reservation.releasedAt).getTime(),
+        toDate(reservation.updatedAt).getTime(),
+        toDate(reservation.createdAt).getTime()
+      );
+      if (Number.isFinite(lastUseMs) && lastUseMs > 0 && lastUseMs <= reusableBeforeMs) {
+        continue;
+      }
+    }
     blocked.add(reservation.monitorEmail.trim().toLowerCase());
   }
   return blocked;

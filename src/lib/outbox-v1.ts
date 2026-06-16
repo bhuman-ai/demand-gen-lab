@@ -80,6 +80,7 @@ const OUTBOX_PLACEMENT_EVIDENCE_TTL_HOURS = 48;
 const OUTBOX_PLACEMENT_CANARY_SEND_NOW = 3;
 const OUTBOX_PLACEMENT_BLOCK_SPAM_RATE = 0.5;
 const OUTBOX_PLACEMENT_PROBE_COOLDOWN_HOURS = 12;
+const OUTBOX_PLACEMENT_FAILED_PROBE_PAUSE_HOURS = 12;
 const OUTBOX_PLACEMENT_PROBE_MAX_ATTEMPTS = 5;
 
 const EMPTY_OUTREACH_ACCOUNT_SECRETS: OutreachAccountSecrets = {
@@ -2126,6 +2127,17 @@ function ageHoursSince(value: string) {
   return Math.max(0, (Date.now() - parsed) / (60 * 60 * 1000));
 }
 
+function isOutboxMonitorPoolFailure(error: string) {
+  const normalized = String(error ?? "").trim().toLowerCase();
+  return (
+    normalized.includes("monitor mailbox") ||
+    normalized.includes("monitor mailboxes") ||
+    normalized.includes("deliverability monitor") ||
+    normalized.includes("seed inbox") ||
+    normalized.includes("seed pool")
+  );
+}
+
 async function resolveOutboxPlacementDecision(input: {
   brandId: string;
   account: OutreachAccount;
@@ -2176,7 +2188,7 @@ async function resolveOutboxPlacementDecision(input: {
     return {
       ...empty,
       state: "pending",
-      action: "canary",
+      action: "pause",
       reason: "placement_probe_pending",
       latestProbeRunId: activeProbe.id,
       latestProbeStatus: activeProbe.status,
@@ -2191,16 +2203,30 @@ async function resolveOutboxPlacementDecision(input: {
 
   if (!completedProbe) {
     const checkedAt = latestProbe ? outboxProbeReferenceTime(latestProbe) : "";
+    const latestProbeAgeHours = checkedAt ? ageHoursSince(checkedAt) : 0;
+    const recentFailedProbe =
+      latestProbe?.status === "failed" && latestProbeAgeHours <= OUTBOX_PLACEMENT_FAILED_PROBE_PAUSE_HOURS;
+    const monitorPoolFailure = latestProbe ? isOutboxMonitorPoolFailure(latestProbe.lastError) : false;
+    const reason = recentFailedProbe
+      ? monitorPoolFailure
+        ? "placement_monitor_pool_unavailable"
+        : "placement_recent_probe_failed"
+      : latestProbe?.lastError
+        ? "placement_latest_probe_failed"
+        : "placement_no_completed_probe";
     return {
       ...empty,
-      reason: latestProbe?.lastError ? "placement_latest_probe_failed" : "placement_no_completed_probe",
+      action: recentFailedProbe ? "pause" : "canary",
+      reason,
       latestProbeRunId: latestProbe?.id ?? "",
       latestProbeStatus: latestProbe?.status ?? "",
       latestProbeAt: checkedAt,
-      latestProbeAgeHours: checkedAt ? Math.round(ageHoursSince(checkedAt) * 10) / 10 : 0,
+      latestProbeAgeHours: checkedAt ? Math.round(latestProbeAgeHours * 10) / 10 : 0,
       placement: latestProbe?.placement || "unknown",
       summaryText: latestProbe?.summaryText ?? "",
       lastError: latestProbe?.lastError ?? "",
+      canarySendNow: recentFailedProbe ? 0 : OUTBOX_PLACEMENT_CANARY_SEND_NOW,
+      probeRequired: !recentFailedProbe,
     };
   }
 

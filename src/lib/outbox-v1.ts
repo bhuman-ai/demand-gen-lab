@@ -1854,13 +1854,22 @@ async function resolveReplyToEmail(input: {
   brandId: string;
   account: OutreachAccount;
 }) {
+  const accountReplyTo =
+    getOutreachAccountReplyToEmail(input.account).trim() ||
+    input.account.config.customerIo.replyToEmail.trim() ||
+    getOutreachAccountFromEmail(input.account).trim();
+  if (input.account.provider === "mailpool") {
+    return {
+      replyToEmail: accountReplyTo,
+      mailboxAccountId: input.account.id,
+    };
+  }
   const assignment = await getBrandOutreachAssignment(input.brandId).catch(() => null);
   const mailboxAccountId = String(assignment?.mailboxAccountId ?? "").trim();
   const mailboxAccount = mailboxAccountId ? await getOutreachAccount(mailboxAccountId).catch(() => null) : null;
   const replyToEmail =
     getOutreachAccountReplyToEmail(mailboxAccount ?? input.account).trim() ||
-    input.account.config.customerIo.replyToEmail.trim() ||
-    getOutreachAccountFromEmail(input.account).trim();
+    accountReplyTo;
   return {
     replyToEmail,
     mailboxAccountId: mailboxAccount?.id ?? input.account.id,

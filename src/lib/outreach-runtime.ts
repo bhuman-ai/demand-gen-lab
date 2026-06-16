@@ -21264,6 +21264,59 @@ export async function runOutreachTick(
   };
 }
 
+type InboxSyncCandidateRow = {
+  brandId: string;
+  mailboxAccountId: string;
+  lastSyncedAtMs: number;
+};
+
+type InboxSyncErrorRow = {
+  brandId: string;
+  mailboxAccountId: string;
+  error: string;
+};
+
+function inboxSyncErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error ?? "unknown_error");
+}
+
+async function retryInboxSyncDelay(ms: number) {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function loadInboxSyncBrands(errors: InboxSyncErrorRow[]) {
+  try {
+    return await listBrands();
+  } catch (error) {
+    errors.push({
+      brandId: "",
+      mailboxAccountId: "",
+      error: `listBrands:${inboxSyncErrorMessage(error)}`,
+    });
+    return [];
+  }
+}
+
+async function loadInboxSyncAccounts(errors: InboxSyncErrorRow[]) {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await listOutreachAccounts();
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) {
+        await retryInboxSyncDelay(350);
+      }
+    }
+  }
+  errors.push({
+    brandId: "",
+    mailboxAccountId: "",
+    error: `listOutreachAccounts:${inboxSyncErrorMessage(lastError)}`,
+  });
+  return [];
+}
+
 export async function runInboxSyncTick(limit = 12): Promise<{
   brandsChecked: number;
   eligibleBrands: number;
@@ -21274,13 +21327,24 @@ export async function runInboxSyncTick(limit = 12): Promise<{
   failed: number;
   errors: Array<{ brandId: string; mailboxAccountId: string; error: string }>;
 }> {
-  const [brands, accounts] = await Promise.all([listBrands(), listOutreachAccounts()]);
+  const errors: InboxSyncErrorRow[] = [];
+  const [brands, accounts] = await Promise.all([
+    loadInboxSyncBrands(errors),
+    loadInboxSyncAccounts(errors),
+  ]);
   const accountById = new Map(accounts.map((account) => [account.id, account] as const));
 
   const candidateRows = (
     await Promise.all(
       brands.map(async (brand) => {
-        const assignment = await getBrandOutreachAssignment(brand.id);
+        const assignment = await getBrandOutreachAssignment(brand.id).catch((error) => {
+          errors.push({
+            brandId: brand.id,
+            mailboxAccountId: "",
+            error: `getBrandOutreachAssignment:${inboxSyncErrorMessage(error)}`,
+          });
+          return null;
+        });
         const mailboxIds = new Set<string>();
         const primaryMailboxId = String(
           assignment?.mailboxAccountId ?? assignment?.accountId ?? ""
@@ -21296,9 +21360,16 @@ export async function runInboxSyncTick(limit = 12): Promise<{
           [...mailboxIds].map(async (mailboxAccountId) => {
             const account = accountById.get(mailboxAccountId);
             if (!account || !supportsAutomaticInboxSync(account)) return null;
-            const secrets = await getOutreachAccountSecrets(mailboxAccountId);
+            const secrets = await getOutreachAccountSecrets(mailboxAccountId).catch((error) => {
+              errors.push({
+                brandId: brand.id,
+                mailboxAccountId,
+                error: `getOutreachAccountSecrets:${inboxSyncErrorMessage(error)}`,
+              });
+              return null;
+            });
             if (!secrets?.mailboxPassword.trim()) return null;
-            const syncState = await getInboxSyncState(brand.id, mailboxAccountId);
+            const syncState = await getInboxSyncState(brand.id, mailboxAccountId).catch(() => null);
             const syncedAt = Date.parse(syncState?.lastSyncedAt || syncState?.updatedAt || "");
             return {
               brandId: brand.id,
@@ -21311,7 +21382,7 @@ export async function runInboxSyncTick(limit = 12): Promise<{
     )
   )
     .flat()
-    .filter((row): row is { brandId: string; mailboxAccountId: string; lastSyncedAtMs: number } => Boolean(row))
+    .filter((row): row is InboxSyncCandidateRow => Boolean(row))
     .sort((left, right) => {
       if (left.lastSyncedAtMs !== right.lastSyncedAtMs) {
         return left.lastSyncedAtMs - right.lastSyncedAtMs;
@@ -21327,8 +21398,7 @@ export async function runInboxSyncTick(limit = 12): Promise<{
   let importedInboxMessages = 0;
   let duplicateMessages = 0;
   let skippedMessages = 0;
-  let failed = 0;
-  const errors: Array<{ brandId: string; mailboxAccountId: string; error: string }> = [];
+  let failed = errors.length;
 
   for (const candidate of candidateRows) {
     const result = await syncBrandInboxMailbox({

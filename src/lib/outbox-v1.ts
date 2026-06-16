@@ -1858,7 +1858,12 @@ async function resolveReplyToEmail(input: {
     getOutreachAccountReplyToEmail(input.account).trim() ||
     input.account.config.customerIo.replyToEmail.trim() ||
     getOutreachAccountFromEmail(input.account).trim();
-  if (input.account.provider === "mailpool") {
+  const accountMailboxEmail = input.account.config.mailbox.email.trim().toLowerCase();
+  const accountOwnsReplyMailbox =
+    input.account.accountType !== "delivery" &&
+    Boolean(accountMailboxEmail) &&
+    accountReplyTo.toLowerCase() === accountMailboxEmail;
+  if (input.account.provider === "mailpool" || accountOwnsReplyMailbox) {
     return {
       replyToEmail: accountReplyTo,
       mailboxAccountId: input.account.id,

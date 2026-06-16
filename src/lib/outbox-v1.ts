@@ -49,6 +49,7 @@ import {
   sendOutreachMessage,
 } from "@/lib/outreach-providers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
+import { generateJsonWithLlm } from "@/lib/llm-json";
 
 export const OUTBOX_V1_EXTERNAL_REF_PREFIX = "outbox_v1:";
 export const OUTBOX_V1_SOURCE_PREFIX = "outbox-v1:";
@@ -64,6 +65,7 @@ const DEFAULT_OUTBOX_AUTOPILOT_COOLDOWN_HOURS = 1;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER = 4;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR = 6;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_CAP = 20;
+const DEFAULT_OUTBOX_MESSAGE_EXPERIMENT_MODEL = "openai/gpt-5.5";
 
 type OutboxSourceMode = "contacts" | "airscale" | "auto";
 
@@ -128,6 +130,24 @@ type OutboxProspectSourcingResult = {
   budgetUsedUsd: number;
   exaSpendUsd: number;
   dataForSeoSpendUsd: number;
+};
+
+type OutboxMessageExperiment = {
+  id: string;
+  provider: "openrouter" | "openai";
+  model: string;
+  variantName: string;
+  hypothesis: string;
+  targetSegment: string;
+  primaryAngle: string;
+  proofPoint: string;
+  subject: string;
+  body: string;
+  replyGoal: string;
+  expectedReplySignal: string;
+  risks: string[];
+  qualityScore: number;
+  generatedAt: string;
 };
 
 export type OutboxSenderOption = {
@@ -211,6 +231,7 @@ export type OutboxLaunchResult = {
   rejected: ManualBatchRejectedContact[];
   policy: OutboxPolicyDecision;
   messages: OutreachMessage[];
+  copyExperiment: OutboxMessageExperiment | null;
   finder: OutboxFinderSummary | null;
   prospectSourcing: OutboxProspectSourcingSummary | null;
   counts: {
@@ -755,6 +776,198 @@ function renderTemplate(template: string, contact: ManualBatchAcceptedContact) {
     domain: contact.domain,
   };
   return String(template ?? "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key: string) => values[key] ?? "");
+}
+
+function outboxCopyExperimentModel() {
+  return (
+    outboxEnvText("OUTBOX_AUTOPILOT_MESSAGE_MODEL", 120) ||
+    outboxEnvText("OPENROUTER_MODEL_TASK_OUTBOX_MESSAGE_EXPERIMENT", 120) ||
+    DEFAULT_OUTBOX_MESSAGE_EXPERIMENT_MODEL
+  );
+}
+
+function outboxMessageExperimentsEnabled(sourceMode: OutboxSourceMode) {
+  const raw = String(process.env.OUTBOX_AUTOPILOT_MESSAGE_EXPERIMENTS_ENABLED ?? "").trim().toLowerCase();
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  return sourceMode === "auto";
+}
+
+function outboxWordCount(text: string) {
+  return text.split(/\s+/).map((word) => word.trim()).filter(Boolean).length;
+}
+
+function hasTemplateToken(text: string, token: string) {
+  return new RegExp(`\\{\\{\\s*${token}\\s*\\}\\}`, "i").test(text);
+}
+
+function outboxMessageExperimentSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "variantName",
+      "hypothesis",
+      "targetSegment",
+      "primaryAngle",
+      "proofPoint",
+      "subject",
+      "body",
+      "replyGoal",
+      "expectedReplySignal",
+      "risks",
+      "qualityScore",
+    ],
+    properties: {
+      variantName: { type: "string", minLength: 4, maxLength: 80 },
+      hypothesis: { type: "string", minLength: 20, maxLength: 240 },
+      targetSegment: { type: "string", minLength: 10, maxLength: 180 },
+      primaryAngle: { type: "string", minLength: 10, maxLength: 160 },
+      proofPoint: { type: "string", minLength: 5, maxLength: 180 },
+      subject: {
+        type: "string",
+        minLength: 4,
+        maxLength: 90,
+        description: "Short subject containing {{company}}. No hype or fake familiarity.",
+      },
+      body: {
+        type: "string",
+        minLength: 120,
+        maxLength: 900,
+        description:
+          "Plain-text email body with {{firstName}} and {{company}}, 45-150 words, signed by Zeynep. No URLs, no fake observation opener.",
+      },
+      replyGoal: { type: "string", minLength: 10, maxLength: 160 },
+      expectedReplySignal: { type: "string", minLength: 10, maxLength: 160 },
+      risks: {
+        type: "array",
+        minItems: 1,
+        maxItems: 4,
+        items: { type: "string", minLength: 3, maxLength: 140 },
+      },
+      qualityScore: {
+        type: "integer",
+        minimum: 0,
+        maximum: 100,
+        description: "0-100 sendability and reply-quality score. Use 80+ only when the copy clears all constraints.",
+      },
+    },
+  };
+}
+
+function normalizeOutboxMessageExperiment(input: {
+  raw: unknown;
+  provider: OutboxMessageExperiment["provider"];
+  model: string;
+  batchId: string;
+}): OutboxMessageExperiment {
+  const row = asRecord(input.raw);
+  const risks = asArray(row.risks).map((risk) => compactText(risk, 140)).filter(Boolean).slice(0, 4);
+  const subject = compactText(row.subject, 90);
+  const body = String(row.body ?? "").replace(/\r\n/g, "\n").trim();
+  const rawQualityScore = clampInt(row.qualityScore, 0, 0, 100);
+  const qualityScore = rawQualityScore > 0 && rawQualityScore <= 10 ? rawQualityScore * 10 : rawQualityScore;
+  const failures: string[] = [];
+
+  if (!hasTemplateToken(body, "firstName")) failures.push("body_missing_first_name_token");
+  if (!hasTemplateToken(body, "company")) failures.push("body_missing_company_token");
+  if (!hasTemplateToken(subject, "company")) failures.push("subject_missing_company_token");
+  if (outboxWordCount(body) < 45 || outboxWordCount(body) > 150) failures.push("body_word_count_out_of_bounds");
+  if (/https?:\/\//i.test(body)) failures.push("body_contains_url");
+  if (/\b(guarantee|guaranteed|revolutionary|no[- ]?brainer|just checking in)\b/i.test(body)) {
+    failures.push("body_contains_hype_or_spam_phrase");
+  }
+  if (/\b(noticed|saw|came across)\b/i.test(body)) failures.push("body_uses_rejected_observation_frame");
+  if (qualityScore < 70) failures.push("quality_score_below_bar");
+  if (failures.length) {
+    throw new Error(`GPT outbox message experiment failed validation: ${failures.join(", ")}`);
+  }
+
+  return {
+    id: `copy_${input.batchId}`,
+    provider: input.provider,
+    model: input.model,
+    variantName: compactText(row.variantName, 80),
+    hypothesis: compactText(row.hypothesis, 240),
+    targetSegment: compactText(row.targetSegment, 180),
+    primaryAngle: compactText(row.primaryAngle, 160),
+    proofPoint: compactText(row.proofPoint, 180),
+    subject,
+    body,
+    replyGoal: compactText(row.replyGoal, 160),
+    expectedReplySignal: compactText(row.expectedReplySignal, 160),
+    risks: risks.length ? risks : ["Unknown copy risk"],
+    qualityScore,
+    generatedAt: nowIso(),
+  };
+}
+
+async function generateOutboxMessageExperiment(input: {
+  brand: BrandRecord;
+  targetAudience: string;
+  offer: string;
+  contacts: OutboxPreparedContact[];
+  batchId: string;
+}): Promise<OutboxMessageExperiment> {
+  const sampleContacts = input.contacts.slice(0, 8).map((contact) => ({
+    firstName: (contact.name || "").split(/\s+/).filter(Boolean)[0] || "",
+    name: contact.name,
+    company: contact.company,
+    title: contact.title,
+    domain: contact.domain,
+  }));
+  const brandContext = {
+    name: input.brand.name,
+    website: input.brand.website,
+    product: input.brand.product,
+    offer: input.offer || input.brand.product || input.brand.name,
+    targetAudience: input.targetAudience,
+    idealCustomerProfiles: input.brand.idealCustomerProfiles.slice(0, 6),
+    targetMarkets: input.brand.targetMarkets.slice(0, 6),
+    keyFeatures: input.brand.keyFeatures.slice(0, 8),
+    keyBenefits: input.brand.keyBenefits.slice(0, 8),
+    availableAssets: input.brand.availableAssets.slice(0, 8),
+    sampleContacts,
+  };
+  const prompt = [
+    "You choose the outbound email experiment for LastB2B Outbox. This is not an env-template fill-in task.",
+    "",
+    "Create one message experiment for this batch. The goal is a credible reply, not a pitch dump.",
+    "Use only facts in the provided JSON. Do not invent case studies, metrics, mutual connections, observed behavior, or company-specific research.",
+    "Prefer a role-relevant reply-first question. Keep it plain text, direct, and low-pressure.",
+    "Avoid any observation opener. Do not use noticed, saw, came across, just checking in, or similar fake-research frames.",
+    "The email must contain {{firstName}} and {{company}} placeholders in the body, and {{company}} in the subject.",
+    "Do not include URLs, markdown, tracking language, fake familiarity, hype, discounts, guarantees, or manipulative urgency.",
+    "Sign as Zeynep. Keep the body between 45 and 150 words.",
+    "qualityScore must be an integer on a 0-100 scale. Improve the copy until it honestly deserves at least 80.",
+    "",
+    `Brand and batch context JSON:\n${JSON.stringify(brandContext, null, 2)}`,
+  ].join("\n");
+  const result = await generateJsonWithLlm({
+    task: "outbox_message_experiment",
+    providerOverride: "openrouter",
+    openRouterOverrideModel: outboxCopyExperimentModel(),
+    prompt,
+    format: {
+      type: "json_schema",
+      name: "outbox_message_experiment",
+      schema: outboxMessageExperimentSchema(),
+    },
+    reasoningEffort: "high",
+    maxOutputTokens: 1400,
+  });
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(result.text);
+  } catch {
+    throw new Error(`GPT outbox message experiment returned invalid JSON: ${result.text.slice(0, 240)}`);
+  }
+  return normalizeOutboxMessageExperiment({
+    raw: parsed,
+    provider: result.provider,
+    model: result.model,
+    batchId: input.batchId,
+  });
 }
 
 function outboxEmailVerification(): EmailVerificationState {
@@ -1486,11 +1699,14 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
   const brand = await getBrandById(input.brandId, { includeEmbedded: true });
   if (!brand) throw new Error("Brand not found.");
 
-  const subject = compactText(input.subject, 200);
-  const body = String(input.body ?? "").trim();
-  if (!subject) throw new Error("Subject is required.");
-  if (!body) throw new Error("Body is required.");
   const sourceMode = normalizeOutboxSourceMode(input);
+  const messageExperimentsEnabled = outboxMessageExperimentsEnabled(sourceMode);
+  let subject = compactText(input.subject, 200);
+  let body = String(input.body ?? "").trim();
+  if (!messageExperimentsEnabled && !subject) throw new Error("Subject is required.");
+  if (!messageExperimentsEnabled && !body) throw new Error("Body is required.");
+  if (!subject) subject = defaultOutboxAutopilotSubject();
+  if (!body) body = defaultOutboxAutopilotBody(brand);
   const batchId = `ob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const batchName = compactText(input.batchName, 120) || `Outbox ${new Date().toLocaleDateString("en-US")}`;
 
@@ -1545,6 +1761,19 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
   }
 
   const accepted = deduped.accepted.slice(0, MAX_OUTBOX_BATCH_CONTACTS);
+  const copyExperiment = messageExperimentsEnabled
+    ? await generateOutboxMessageExperiment({
+        brand,
+        targetAudience: compactText(input.prospectQuery, 1000) || defaultOutboxAutopilotTargetAudience(brand),
+        offer: compactText(input.prospectOffer, 1000) || brand.product || brand.name,
+        contacts: accepted,
+        batchId,
+      })
+    : null;
+  if (copyExperiment) {
+    subject = copyExperiment.subject;
+    body = copyExperiment.body;
+  }
   const requestedSendNow = clampInt(input.requestedSendNow, accepted.length, 0, MAX_OUTBOX_BATCH_CONTACTS);
   const policy = await policyForSender({
     brandId: input.brandId,
@@ -1662,6 +1891,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
           originalSourceUrl: contact.originalSourceUrl,
           warnings: contact.warnings,
           finder: contact.finderMeta,
+          copyExperiment,
           senderAccountId: account.id,
           senderAccountName: account.name,
           senderFromEmail: getOutreachAccountFromEmail(account).trim(),
@@ -1773,6 +2003,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     rejected: allRejected,
     policy,
     messages: refreshed.messages,
+    copyExperiment,
     finder: prepared.finder,
     prospectSourcing: prepared.prospectSourcing,
     counts: {
@@ -2229,7 +2460,7 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         batchName: configuredBatchName || `Autopilot ${new Date().toLocaleDateString("en-US")}`,
         sourceMode: "auto",
         prospectQuery: configuredTargetAudience || defaultOutboxAutopilotTargetAudience(brand),
-        prospectOffer: configuredBody || brand.product || brand.name,
+        prospectOffer: brand.product || brand.name,
         maxProspects: launchMaxProspects,
         subject: configuredSubject || defaultOutboxAutopilotSubject(),
         body: configuredBody || defaultOutboxAutopilotBody(brand),

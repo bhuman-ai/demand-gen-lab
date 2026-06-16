@@ -21,6 +21,7 @@ import {
   getBrandOutreachAssignment,
   getOutreachAccount,
   getOutreachAccountSecrets,
+  type OutreachAccountSecrets,
   listBrandRuns,
   listOutreachAccounts,
   listReplyThreadsByBrand,
@@ -34,7 +35,8 @@ import {
 import {
   getOutreachAccountFromEmail,
   getOutreachAccountReplyToEmail,
-  supportsCustomerIoDelivery,
+  supportsAnyDelivery,
+  supportsMailpoolDelivery,
 } from "@/lib/outreach-account-helpers";
 import { getCanonicalSenderPoolForBrand } from "@/lib/senders";
 import { buildEmailFinderBatchResponse } from "@/lib/internal-email-finder";
@@ -66,6 +68,26 @@ const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER = 4;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR = 6;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_CAP = 20;
 const DEFAULT_OUTBOX_MESSAGE_EXPERIMENT_MODEL = "openai/gpt-5.5";
+
+const EMPTY_OUTREACH_ACCOUNT_SECRETS: OutreachAccountSecrets = {
+  customerIoApiKey: "",
+  customerIoTrackApiKey: "",
+  customerIoAppApiKey: "",
+  apifyToken: "",
+  youtubeClientId: "",
+  youtubeClientSecret: "",
+  youtubeRefreshToken: "",
+  mailboxAccessToken: "",
+  mailboxRefreshToken: "",
+  mailboxPassword: "",
+  mailboxAuthCode: "",
+  mailboxSmtpPassword: "",
+  mailboxAdminEmail: "",
+  mailboxAdminPassword: "",
+  mailboxAdminAuthCode: "",
+  mailboxRecoveryEmail: "",
+  mailboxRecoveryCodes: "",
+};
 
 type OutboxSourceMode = "contacts" | "airscale" | "auto";
 
@@ -282,6 +304,12 @@ export type OutboxAutopilotTickResult = {
   held: number;
   failed: number;
   results: OutboxAutopilotBrandResult[];
+};
+
+type OutboxAutopilotSenderChoice = {
+  sender: OutboxSenderOption;
+  account: OutreachAccount;
+  policy: OutboxPolicyDecision;
 };
 
 function nowIso() {
@@ -1389,6 +1417,54 @@ async function resolveReplyToEmail(input: {
   };
 }
 
+function outboxResolvedSecrets(secrets: OutreachAccountSecrets | null | undefined) {
+  return secrets ?? EMPTY_OUTREACH_ACCOUNT_SECRETS;
+}
+
+function outboxSenderDeliveryReason(account: OutreachAccount, secrets: OutreachAccountSecrets | null | undefined) {
+  const resolvedSecrets = outboxResolvedSecrets(secrets);
+  if (supportsAnyDelivery(account, resolvedSecrets)) return "";
+  if (account.provider === "mailpool") {
+    return supportsMailpoolDelivery(account, resolvedSecrets)
+      ? ""
+      : "Mailpool sender missing mailbox, SMTP, Gmail UI, or password readiness";
+  }
+  return "Customer.io sender missing Site ID, From email, Reply-To, or App API key";
+}
+
+function outboxSenderReadiness(input: {
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets | null | undefined;
+  replyToEmail: string;
+}) {
+  return [
+    input.account.status === "active" ? "" : "Account inactive",
+    outboxSenderDeliveryReason(input.account, input.secrets),
+    input.replyToEmail ? "" : "Reply-To email missing",
+  ].filter(Boolean);
+}
+
+async function requireOutboxSenderReady(input: {
+  brandId: string;
+  account: OutreachAccount;
+  secrets: OutreachAccountSecrets | null | undefined;
+}) {
+  await ensureOutboxSenderAllowed({ brandId: input.brandId, accountId: input.account.id });
+  const reply = await resolveReplyToEmail({ brandId: input.brandId, account: input.account });
+  const missing = outboxSenderReadiness({
+    account: input.account,
+    secrets: input.secrets,
+    replyToEmail: reply.replyToEmail,
+  });
+  if (missing.length > 0) {
+    throw new Error(missing.join("; "));
+  }
+  return {
+    secrets: outboxResolvedSecrets(input.secrets),
+    reply,
+  };
+}
+
 async function senderOptionsForBrand(brandId: string): Promise<OutboxSenderOption[]> {
   const [accounts, assignment, canonicalPool] = await Promise.all([
     listOutreachAccounts(),
@@ -1407,7 +1483,6 @@ async function senderOptionsForBrand(brandId: string): Promise<OutboxSenderOptio
   );
   const scopedAccounts = accounts.filter(
     (account) =>
-      account.provider === "customerio" &&
       account.accountType !== "mailbox" &&
       (allowedAccountIds.size === 0 || allowedAccountIds.has(account.id))
   );
@@ -1419,12 +1494,7 @@ async function senderOptionsForBrand(brandId: string): Promise<OutboxSenderOptio
         mailboxAccountId: "",
       }));
       const fromEmail = getOutreachAccountFromEmail(account).trim();
-      const missing = [
-        account.status === "active" ? "" : "Account inactive",
-        supportsCustomerIoDelivery(account) ? "" : "Customer.io sender missing Site ID, From email, or Reply-To",
-        secrets?.customerIoAppApiKey.trim() ? "" : "Customer.io App API key missing",
-        reply.replyToEmail ? "" : "Reply-To email missing",
-      ].filter(Boolean);
+      const missing = outboxSenderReadiness({ account, secrets, replyToEmail: reply.replyToEmail });
       return {
         accountId: account.id,
         name: account.name,
@@ -1448,7 +1518,7 @@ async function senderOptionsForBrand(brandId: string): Promise<OutboxSenderOptio
 async function ensureOutboxSenderAllowed(input: { brandId: string; accountId: string }) {
   const sender = (await senderOptionsForBrand(input.brandId)).find((option) => option.accountId === input.accountId) ?? null;
   if (!sender) {
-    throw new Error("Choose a Customer.io sender assigned to this brand.");
+    throw new Error("Choose an assigned sender for this brand.");
   }
   if (!sender.ready) {
     throw new Error(sender.reason || "Selected sender is not ready.");
@@ -1570,6 +1640,90 @@ async function policyForSender(input: {
     hold,
     reject: 0,
     reasons,
+  };
+}
+
+async function chooseOutboxAutopilotSender(input: {
+  brandId: string;
+  senders: OutboxSenderOption[];
+  preferredSenderAccountId?: string;
+  requestedContacts: number;
+  requestedSendNow: number;
+}): Promise<{ choice: OutboxAutopilotSenderChoice | null; reason: string; senderAccountId: string }> {
+  const preferredSenderAccountId = String(input.preferredSenderAccountId ?? "").trim();
+  const readySenders = input.senders.filter((sender) => sender.ready);
+  const senderCandidates = preferredSenderAccountId
+    ? input.senders.filter((sender) => sender.accountId === preferredSenderAccountId)
+    : readySenders;
+  if (!senderCandidates.length) {
+    const selected = preferredSenderAccountId
+      ? input.senders.find((sender) => sender.accountId === preferredSenderAccountId) ?? null
+      : input.senders[0] ?? null;
+    return {
+      choice: null,
+      reason: selected?.reason || (preferredSenderAccountId ? "sender_not_found_or_not_assigned" : "no_ready_sender"),
+      senderAccountId: preferredSenderAccountId || selected?.accountId || "",
+    };
+  }
+
+  const choices: OutboxAutopilotSenderChoice[] = [];
+  for (const sender of senderCandidates) {
+    if (!sender.ready) {
+      if (preferredSenderAccountId) {
+        return {
+          choice: null,
+          reason: sender.reason || "sender_not_ready",
+          senderAccountId: sender.accountId,
+        };
+      }
+      continue;
+    }
+    const account = await getOutreachAccount(sender.accountId).catch(() => null);
+    if (!account) {
+      if (preferredSenderAccountId) {
+        return { choice: null, reason: "sender_account_not_found", senderAccountId: sender.accountId };
+      }
+      continue;
+    }
+    const policy = await policyForSender({
+      brandId: input.brandId,
+      account,
+      requestedContacts: input.requestedContacts,
+      requestedSendNow: input.requestedSendNow,
+    });
+    choices.push({ sender, account, policy });
+  }
+
+  if (!choices.length) {
+    return {
+      choice: null,
+      reason: preferredSenderAccountId ? "sender_account_not_found" : "no_ready_sender",
+      senderAccountId: preferredSenderAccountId,
+    };
+  }
+
+  const stateRank: Record<OutboxPolicyDecision["senderState"], number> = {
+    healthy: 4,
+    constrained: 3,
+    warming: 2,
+    paused: 1,
+  };
+  const [best] = choices.sort((left, right) => {
+    const sendNowDiff = right.policy.sendNow - left.policy.sendNow;
+    if (sendNowDiff !== 0) return sendNowDiff;
+    const availableDiff = right.policy.availableNow - left.policy.availableNow;
+    if (availableDiff !== 0) return availableDiff;
+    const stateDiff = stateRank[right.policy.senderState] - stateRank[left.policy.senderState];
+    if (stateDiff !== 0) return stateDiff;
+    const dailyDiff = right.policy.dailyCap - left.policy.dailyCap;
+    if (dailyDiff !== 0) return dailyDiff;
+    if (left.sender.primary !== right.sender.primary) return left.sender.primary ? -1 : 1;
+    return left.sender.fromEmail.localeCompare(right.sender.fromEmail);
+  });
+  return {
+    choice: best ?? null,
+    reason: best ? "" : "no_ready_sender",
+    senderAccountId: best?.sender.accountId ?? preferredSenderAccountId,
   };
 }
 
@@ -1710,15 +1864,14 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
 
   const senderAccountId = String(input.senderAccountId ?? "").trim() ||
     String((await getBrandOutreachAssignment(input.brandId).catch(() => null))?.accountId ?? "").trim();
-  if (!senderAccountId) throw new Error("Choose a Customer.io sender.");
-  await ensureOutboxSenderAllowed({ brandId: input.brandId, accountId: senderAccountId });
+  if (!senderAccountId) throw new Error("Choose a sender.");
   const account = await getOutreachAccount(senderAccountId);
   if (!account) throw new Error("Sender account not found.");
-  if (account.provider !== "customerio") throw new Error("Outbox V1 currently sends through Customer.io senders.");
-  const secrets = await getOutreachAccountSecrets(account.id);
-  if (!secrets?.customerIoAppApiKey.trim()) throw new Error("Customer.io App API key missing for this sender.");
-  const reply = await resolveReplyToEmail({ brandId: input.brandId, account });
-  if (!reply.replyToEmail) throw new Error("Reply-To email missing for this sender.");
+  const { secrets, reply } = await requireOutboxSenderReady({
+    brandId: input.brandId,
+    account,
+    secrets: await getOutreachAccountSecrets(account.id),
+  });
 
   const prepared = await prepareOutboxContacts({
     brandId: input.brandId,
@@ -2136,29 +2289,22 @@ export async function releaseOutboxHeldMessagesForBrand(
     runsEvaluated += 1;
     messagesEvaluated += messages.length;
     const account = await getOutreachAccount(run.accountId).catch(() => null);
-    if (!account || account.provider !== "customerio") {
+    if (!account) {
       held += messages.length;
-      lastReason = "sender_account_missing_or_not_customerio";
+      lastReason = "sender_account_missing";
       continue;
     }
     activeSenderAccountId = account.id;
+    const secrets = await getOutreachAccountSecrets(account.id);
+    let reply: Awaited<ReturnType<typeof resolveReplyToEmail>>;
+    let resolvedSecrets: OutreachAccountSecrets;
     try {
-      await ensureOutboxSenderAllowed({ brandId, accountId: account.id });
+      const ready = await requireOutboxSenderReady({ brandId, account, secrets });
+      reply = ready.reply;
+      resolvedSecrets = ready.secrets;
     } catch (error) {
       held += messages.length;
       lastReason = error instanceof Error ? error.message : "sender_not_allowed";
-      continue;
-    }
-    const secrets = await getOutreachAccountSecrets(account.id);
-    if (!secrets?.customerIoAppApiKey.trim()) {
-      held += messages.length;
-      lastReason = "customerio_app_api_key_missing";
-      continue;
-    }
-    const reply = await resolveReplyToEmail({ brandId, account });
-    if (!reply.replyToEmail) {
-      held += messages.length;
-      lastReason = "reply_to_email_missing";
       continue;
     }
 
@@ -2195,7 +2341,7 @@ export async function releaseOutboxHeldMessagesForBrand(
       const send = await sendOutreachMessage({
         message,
         account,
-        secrets,
+        secrets: resolvedSecrets,
         replyToEmail: reply.replyToEmail,
         recipient: lead.email,
         runId: run.id,
@@ -2364,43 +2510,24 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
       }
 
       const senders = await senderOptionsForBrand(brand.id);
-      const selectedSender = senderAccountId
-        ? senders.find((sender) => sender.accountId === senderAccountId) ?? null
-        : senders.find((sender) => sender.ready) ?? null;
-      if (!selectedSender) {
-        results.push(outboxAutopilotSkip({
-          brand,
-          reason: "no_customerio_sender",
-          senderAccountId,
-          cooldownHours,
-        }));
-        continue;
-      }
-      if (!selectedSender.ready) {
-        results.push(outboxAutopilotSkip({
-          brand,
-          reason: selectedSender.reason || "sender_not_ready",
-          senderAccountId: selectedSender.accountId,
-          cooldownHours,
-        }));
-        continue;
-      }
-      const account = await getOutreachAccount(selectedSender.accountId).catch(() => null);
-      if (!account) {
-        results.push(outboxAutopilotSkip({
-          brand,
-          reason: "sender_account_not_found",
-          senderAccountId: selectedSender.accountId,
-          cooldownHours,
-        }));
-        continue;
-      }
-      const policy = await policyForSender({
+      const senderChoice = await chooseOutboxAutopilotSender({
         brandId: brand.id,
-        account,
+        senders,
+        preferredSenderAccountId: senderAccountId,
         requestedContacts: maxProspects,
         requestedSendNow: requestedSendNow || maxProspects,
       });
+      if (!senderChoice.choice) {
+        results.push(outboxAutopilotSkip({
+          brand,
+          reason: senderChoice.reason,
+          senderAccountId: senderChoice.senderAccountId,
+          cooldownHours,
+        }));
+        continue;
+      }
+      const selectedSender = senderChoice.choice.sender;
+      const policy = senderChoice.choice.policy;
       if (policy.availableNow <= 0) {
         const reason =
           policy.reasons[0] ||

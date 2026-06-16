@@ -787,10 +787,10 @@ function outboxCopyExperimentModel() {
 }
 
 function outboxMessageExperimentsEnabled(sourceMode: OutboxSourceMode) {
+  if (sourceMode === "auto") return true;
   const raw = String(process.env.OUTBOX_AUTOPILOT_MESSAGE_EXPERIMENTS_ENABLED ?? "").trim().toLowerCase();
-  if (["0", "false", "no", "off"].includes(raw)) return false;
   if (["1", "true", "yes", "on"].includes(raw)) return true;
-  return sourceMode === "auto";
+  return false;
 }
 
 function outboxWordCount(text: string) {
@@ -1705,8 +1705,6 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
   let body = String(input.body ?? "").trim();
   if (!messageExperimentsEnabled && !subject) throw new Error("Subject is required.");
   if (!messageExperimentsEnabled && !body) throw new Error("Body is required.");
-  if (!subject) subject = defaultOutboxAutopilotSubject();
-  if (!body) body = defaultOutboxAutopilotBody(brand);
   const batchId = `ob_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const batchName = compactText(input.batchName, 120) || `Outbox ${new Date().toLocaleDateString("en-US")}`;
 
@@ -2031,14 +2029,6 @@ function outboxEnvText(name: string, max = 1000) {
   return compactText(String(process.env[name] ?? "").replace(/\\n/g, "\n"), max);
 }
 
-function outboxEnvMultilineText(name: string, max = 3000) {
-  const raw = String(process.env[name] ?? "")
-    .replace(/\\n/g, "\n")
-    .replace(/\r\n/g, "\n")
-    .trim();
-  return raw.length > max ? raw.slice(0, max).trimEnd() : raw;
-}
-
 function outboxAutopilotEnabled() {
   return outboxEnvFlag("OUTBOX_AUTOPILOT_ENABLED");
 }
@@ -2047,7 +2037,6 @@ function configuredOutboxAutopilotBrandIds() {
   const raw =
     String(process.env.OUTBOX_AUTOPILOT_BRAND_IDS ?? "").trim() ||
     String(process.env.OUTBOX_AUTOPILOT_BRAND_ID ?? "").trim();
-  if (!raw && outboxAutopilotEnabled()) return ["brand_mlg68b9l"];
   return raw
     .split(",")
     .map((entry) => entry.trim())
@@ -2062,27 +2051,6 @@ function defaultOutboxAutopilotTargetAudience(brand: BrandRecord) {
     return `Find senior decision makers at companies matching these ICPs: ${targets.join("; ")}. Prioritize people likely to own budget for ${brand.product || brand.name}.`;
   }
   return `Find senior decision makers at B2B companies likely to need ${brand.product || brand.name}. Prioritize founders, growth leaders, sales leaders, marketing leaders, and operators with budget authority.`;
-}
-
-function defaultOutboxAutopilotSubject() {
-  return "Quick question for {{company}}";
-}
-
-function defaultOutboxAutopilotBody(brand: BrandRecord) {
-  const benefit =
-    brand.keyBenefits.find(Boolean) ||
-    "start more qualified conversations without adding manual outbound work";
-  const product = brand.product || brand.name;
-  return [
-    "Hi {{firstName}},",
-    "",
-    `I saw {{company}} and thought this might be relevant. ${brand.name} helps teams use ${product} to ${benefit}.`,
-    "",
-    "Worth a quick look if personalized video could help your team get more replies from outbound or customer workflows?",
-    "",
-    "Best,",
-    "Zeynep",
-  ].join("\n");
 }
 
 async function loadOutboxAutopilotBrands(limit: number) {
@@ -2336,8 +2304,6 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
   );
   const timezone = outboxEnvText("OUTBOX_AUTOPILOT_TIMEZONE", 80) || DEFAULT_TIMEZONE;
   const configuredTargetAudience = outboxEnvText("OUTBOX_AUTOPILOT_TARGET_AUDIENCE", 1000);
-  const configuredSubject = outboxEnvText("OUTBOX_AUTOPILOT_SUBJECT", 200);
-  const configuredBody = outboxEnvMultilineText("OUTBOX_AUTOPILOT_BODY", 3000);
   const configuredBatchName = outboxEnvText("OUTBOX_AUTOPILOT_BATCH_NAME", 120);
   const results: OutboxAutopilotBrandResult[] = [];
 
@@ -2462,8 +2428,8 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         prospectQuery: configuredTargetAudience || defaultOutboxAutopilotTargetAudience(brand),
         prospectOffer: brand.product || brand.name,
         maxProspects: launchMaxProspects,
-        subject: configuredSubject || defaultOutboxAutopilotSubject(),
-        body: configuredBody || defaultOutboxAutopilotBody(brand),
+        subject: "",
+        body: "",
         requestedSendNow: launchSendNow,
         timezone,
       });

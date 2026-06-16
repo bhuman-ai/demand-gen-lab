@@ -4,12 +4,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 const TABLE_INTERNAL_CRON_RUNS = "demanddev_internal_cron_runs";
 
 export function isInternalCronAuthorized(request: Request) {
-  const token =
-    String(process.env.OUTREACH_CRON_TOKEN ?? "").trim() ||
-    String(process.env.CRON_SECRET ?? "").trim();
-  if (!token) return true;
+  const tokens = [process.env.OUTREACH_CRON_TOKEN, process.env.CRON_SECRET]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  if (!tokens.length) return true;
   const header = request.headers.get("authorization") ?? "";
-  return header === `Bearer ${token}`;
+  return tokens.some((token) => header === `Bearer ${token}`);
 }
 
 export function cronErrorMessage(error: unknown) {

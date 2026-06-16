@@ -5,7 +5,7 @@ import { runSenderLaunchTick } from "@/lib/sender-launch";
 import { getGmailUiWorkerHealth, hasGmailUiWorkerConfig } from "@/lib/gmail-ui-worker-client";
 import { runMailpoolOutreachAccountSyncTick } from "@/lib/mailpool-account-refresh";
 import { reconcileAssignedSenderWarmupCampaigns } from "@/lib/sender-warmup-campaigns";
-import { isInternalCronAuthorized, runCronTask } from "@/lib/internal-cron";
+import { isInternalCronAuthorized, recordInternalCronRun, runCronTask } from "@/lib/internal-cron";
 import { runLeadrChannelSyncTick } from "@/lib/leadr-channel";
 import { runMissionTick } from "@/lib/mission-learning";
 import { runBrandActivationAutopilot } from "@/lib/brand-activation-autopilot";
@@ -18,6 +18,7 @@ async function handleOpsTick(request: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  const startedAt = Date.now();
   const gmailUiWorkerTask = hasGmailUiWorkerConfig()
     ? runCronTask("gmailUiWorker", () => getGmailUiWorkerHealth(), { timeoutMs: 10_000 })
     : Promise.resolve({
@@ -80,19 +81,23 @@ async function handleOpsTick(request: Request) {
     }),
   ]);
 
-  return NextResponse.json({
-    ok:
-      mailpoolSync.ok &&
-      warmupCampaigns.ok &&
-      campaignPrep.ok &&
-      campaignHopper.ok &&
-      gmailUiWorker.ok &&
-      inboxSync.ok &&
-      senderLaunch.ok &&
-      missions.ok &&
-      leadrSync.ok &&
-      brandActivation.ok &&
-      outboxAutopilot.ok,
+  const tasks = [
+    mailpoolSync,
+    warmupCampaigns,
+    campaignPrep,
+    campaignHopper,
+    gmailUiWorker,
+    inboxSync,
+    senderLaunch,
+    missions,
+    leadrSync,
+    brandActivation,
+    outboxAutopilot,
+  ];
+  const ok = tasks.every((task) => task.ok);
+  const failedTasks = tasks.filter((task) => !task.ok);
+  const response = {
+    ok,
     criticalPath: "ops",
     mailpoolSync,
     warmupCampaigns,
@@ -105,7 +110,18 @@ async function handleOpsTick(request: Request) {
     leadrSync,
     brandActivation,
     outboxAutopilot,
+  };
+
+  await recordInternalCronRun({
+    taskName: "outreach_ops_tick",
+    route: "/api/internal/outreach/ops-tick",
+    ok,
+    durationMs: Date.now() - startedAt,
+    details: response,
+    error: failedTasks.map((task) => `${task.name}:${"error" in task ? task.error : "failed"}`).join("; "),
   });
+
+  return NextResponse.json(response);
 }
 
 export async function GET(request: Request) {

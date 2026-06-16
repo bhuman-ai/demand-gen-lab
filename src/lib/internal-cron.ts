@@ -38,6 +38,7 @@ export async function runCronTask<T>(
   options: { timeoutMs?: number } = {}
 ): Promise<SettledCronTaskResult<T>> {
   const startedAt = Date.now();
+  let timeout: ReturnType<typeof setTimeout> | null = null;
 
   try {
     const value =
@@ -45,7 +46,11 @@ export async function runCronTask<T>(
         ? await Promise.race<T>([
             task(),
             new Promise<T>((_, reject) => {
-              setTimeout(() => reject(new Error(`${name} timed out after ${options.timeoutMs}ms`)), options.timeoutMs);
+              timeout = setTimeout(
+                () => reject(new Error(`${name} timed out after ${options.timeoutMs}ms`)),
+                options.timeoutMs
+              );
+              timeout.unref?.();
             }),
           ])
         : await task();
@@ -63,6 +68,8 @@ export async function runCronTask<T>(
       durationMs: Date.now() - startedAt,
       error: cronErrorMessage(error),
     };
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

@@ -1,14 +1,6 @@
 import { NextResponse } from "next/server";
+import { isInternalCronAuthorized } from "@/lib/internal-cron";
 import { setSavedNamecheapCustomNameservers } from "@/lib/outreach-provisioning";
-
-function isAuthorized(request: Request) {
-  const token =
-    String(process.env.OUTREACH_CRON_TOKEN ?? "").trim() ||
-    String(process.env.CRON_SECRET ?? "").trim();
-  if (!token) return true;
-  const header = request.headers.get("authorization") ?? "";
-  return header === `Bearer ${token}`;
-}
 
 function normalizeNameservers(value: unknown) {
   if (!Array.isArray(value)) return [];
@@ -21,7 +13,7 @@ function normalizeDomains(value: unknown) {
 }
 
 export async function POST(request: Request) {
-  if (!isAuthorized(request)) {
+  if (!isInternalCronAuthorized(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

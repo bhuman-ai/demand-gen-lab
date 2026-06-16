@@ -2119,13 +2119,17 @@ async function chooseOutboxAutopilotSender(input: {
 }): Promise<{ choice: OutboxAutopilotSenderChoice | null; reason: string; senderAccountId: string }> {
   const preferredSenderAccountId = String(input.preferredSenderAccountId ?? "").trim();
   const readySenders = input.senders.filter((sender) => sender.ready);
+  const preferredSender = preferredSenderAccountId
+    ? input.senders.find((sender) => sender.accountId === preferredSenderAccountId) ?? null
+    : null;
   const senderCandidates = preferredSenderAccountId
-    ? input.senders.filter((sender) => sender.accountId === preferredSenderAccountId)
+    ? [
+        ...(preferredSender ? [preferredSender] : []),
+        ...readySenders.filter((sender) => sender.accountId !== preferredSenderAccountId),
+      ]
     : readySenders;
   if (!senderCandidates.length) {
-    const selected = preferredSenderAccountId
-      ? input.senders.find((sender) => sender.accountId === preferredSenderAccountId) ?? null
-      : input.senders[0] ?? null;
+    const selected = preferredSender ?? input.senders[0] ?? null;
     return {
       choice: null,
       reason: selected?.reason || (preferredSenderAccountId ? "sender_not_found_or_not_assigned" : "no_ready_sender"),
@@ -2134,21 +2138,18 @@ async function chooseOutboxAutopilotSender(input: {
   }
 
   const choices: OutboxAutopilotSenderChoice[] = [];
+  let preferredSkipReason = "";
   for (const sender of senderCandidates) {
     if (!sender.ready) {
       if (preferredSenderAccountId) {
-        return {
-          choice: null,
-          reason: sender.reason || "sender_not_ready",
-          senderAccountId: sender.accountId,
-        };
+        preferredSkipReason = sender.reason || "sender_not_ready";
       }
       continue;
     }
     const account = await getOutreachAccount(sender.accountId).catch(() => null);
     if (!account) {
       if (preferredSenderAccountId) {
-        return { choice: null, reason: "sender_account_not_found", senderAccountId: sender.accountId };
+        preferredSkipReason = "sender_account_not_found";
       }
       continue;
     }
@@ -2164,7 +2165,7 @@ async function chooseOutboxAutopilotSender(input: {
   if (!choices.length) {
     return {
       choice: null,
-      reason: preferredSenderAccountId ? "sender_account_not_found" : "no_ready_sender",
+      reason: preferredSkipReason || (preferredSenderAccountId ? "sender_account_not_found" : "no_ready_sender"),
       senderAccountId: preferredSenderAccountId,
     };
   }
@@ -3024,7 +3025,6 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
   for (const brand of brands) {
     try {
       const release = await releaseOutboxHeldMessagesForBrand(brand.id, {
-        senderAccountId,
         limit: requestedSendNow || 25,
       });
       if (release.sent > 0 || release.failed > 0) {

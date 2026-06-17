@@ -71,9 +71,9 @@ const OUTBOX_RECENT_RECIPIENT_DEDUPE_DAYS = 90;
 const DEFAULT_OUTBOX_AUTOPILOT_COOLDOWN_HOURS = 1;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER = 4;
 const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR = 6;
-const OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_CAP = 20;
 const DEFAULT_OUTBOX_MESSAGE_EXPERIMENT_MODEL = "openai/gpt-5.5";
 const OUTBOX_PROSPECT_QUEUE_TABLE = "demanddev_outbox_prospect_queue";
+const INTERNAL_CRON_RUNS_TABLE = "demanddev_internal_cron_runs";
 const DEFAULT_OUTBOX_QUEUE_TARGET_READY = 100;
 const DEFAULT_OUTBOX_QUEUE_TTL_DAYS = 45;
 const OUTBOX_PLACEMENT_EVIDENCE_TTL_HOURS = 48;
@@ -455,6 +455,71 @@ function airscaleBaseUrl() {
   ).replace(/\/+$/, "");
 }
 
+function outboxAirscaleSpendPauseHours() {
+  return outboxEnvNumber("OUTBOX_AUTOPILOT_AIRSCALE_PAUSE_HOURS", 24, 1, 168);
+}
+
+function isAirscaleCreditError(reason: string) {
+  const normalized = String(reason ?? "").trim().toLowerCase();
+  return normalized.includes("airscale") && normalized.includes("insufficient credits");
+}
+
+function isAirscaleNoSendableReason(reason: string) {
+  const normalized = String(reason ?? "").trim().toLowerCase();
+  return (
+    normalized.includes("no sendable contacts after dedupe") ||
+    normalized.includes("airscale_no_high_confidence_email") ||
+    normalized.includes("domain must be the company website domain") ||
+    normalized.includes("duplicate_recent_outbox_recipient") ||
+    normalized.includes("role_account")
+  );
+}
+
+function readCronOutboxResults(details: unknown): Array<Record<string, unknown>> {
+  const record = asRecord(details);
+  const outbox = asRecord(asRecord(record.outboxAutopilot).value ?? record.outboxAutopilot);
+  return asArray(outbox.results).map(asRecord);
+}
+
+async function recentOutboxAirscaleSpendBlock(brandId: string): Promise<{ blocked: boolean; reason: string }> {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return { blocked: false, reason: "" };
+  const pauseHours = outboxAirscaleSpendPauseHours();
+  const since = new Date(Date.now() - pauseHours * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from(INTERNAL_CRON_RUNS_TABLE)
+    .select("details,created_at")
+    .in("task_name", ["outbox_autopilot", "outreach_ops_tick"])
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) return { blocked: false, reason: "" };
+
+  let noSendableCount = 0;
+  for (const row of data ?? []) {
+    const results = readCronOutboxResults((row as Record<string, unknown>).details);
+    for (const result of results) {
+      if (String(result.brandId ?? "").trim() !== brandId) continue;
+      const reason = String(result.reason ?? "").trim();
+      if (isAirscaleCreditError(reason)) {
+        return {
+          blocked: true,
+          reason: `airscale_spend_paused:insufficient_credits:${pauseHours}h`,
+        };
+      }
+      if (isAirscaleNoSendableReason(reason)) noSendableCount += 1;
+    }
+  }
+
+  if (noSendableCount >= 3) {
+    return {
+      blocked: true,
+      reason: `airscale_spend_paused:no_sendable_contacts:${pauseHours}h`,
+    };
+  }
+  return { blocked: false, reason: "" };
+}
+
 function compactText(value: unknown, max = 180) {
   const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
   return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}...` : normalized;
@@ -464,20 +529,6 @@ function clampInt(value: unknown, fallback: number, min: number, max: number) {
   const parsed = Math.round(Number(value));
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
-}
-
-function outboxAutopilotProspectRequestSize(input: { maxProspects: number; sendNow: number; availableNow: number }) {
-  const capacity = Math.max(0, Math.min(input.sendNow, input.availableNow));
-  if (capacity <= 0) return 0;
-  const desired = Math.min(
-    OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_CAP,
-    Math.max(
-      capacity,
-      capacity * OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_MULTIPLIER,
-      OUTBOX_AUTOPILOT_SOURCE_OVERFETCH_FLOOR
-    )
-  );
-  return clampInt(desired, capacity, 1, Math.max(1, input.maxProspects));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -3408,12 +3459,6 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
   const maxProspects = outboxEnvNumber("OUTBOX_AUTOPILOT_MAX_PROSPECTS", 50, 1, 100);
   const requestedSendNow = outboxEnvNumber("OUTBOX_AUTOPILOT_REQUESTED_SEND_NOW", 25, 0, 100);
   const queueEnabled = !outboxEnvFlag("OUTBOX_AUTOPILOT_QUEUE_DISABLED");
-  const queueTargetReady = outboxEnvNumber(
-    "OUTBOX_AUTOPILOT_QUEUE_TARGET_READY",
-    DEFAULT_OUTBOX_QUEUE_TARGET_READY,
-    1,
-    1000
-  );
   const queueMaxSourceNow = outboxEnvNumber(
     "OUTBOX_AUTOPILOT_QUEUE_MAX_SOURCE_PER_TICK",
     Math.max(
@@ -3502,35 +3547,22 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
       let queueFill: OutboxQueueFillResult | null = null;
 
       if (queueEnabled) {
-        try {
-          queueFill = await fillOutboxProspectQueueForBrand({
-            brandId: brand.id,
-            senderAccountId: selectedSender.accountId,
-            batchName,
-            targetAudience,
-            offer,
-            targetReady: queueTargetReady,
-            maxSourceNow: queueMaxSourceNow,
-            ttlDays: queueTtlDays,
-          });
-        } catch (error) {
-          const ready = await countEligibleQueuedProspects(brand.id);
-          queueFill = {
-            available: ready.available,
-            skipped: false,
-            reason: error instanceof Error ? error.message : "queue_fill_failed",
-            readyBefore: ready.count,
-            readyAfter: ready.count,
-            requested: 0,
-            sourced: 0,
-            found: 0,
-            inserted: 0,
-            rejected: 0,
-            duplicate: 0,
-            finder: null,
-            prospectSourcing: null,
-          };
-        }
+        const ready = await countEligibleQueuedProspects(brand.id);
+        queueFill = {
+          available: ready.available,
+          skipped: true,
+          reason: ready.reason || (ready.count > 0 ? "queue_ready" : "queue_empty"),
+          readyBefore: ready.count,
+          readyAfter: ready.count,
+          requested: 0,
+          sourced: 0,
+          found: 0,
+          inserted: 0,
+          rejected: 0,
+          duplicate: 0,
+          finder: null,
+          prospectSourcing: null,
+        };
       }
 
       if (policy.availableNow <= 0) {
@@ -3552,6 +3584,24 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
       }
 
       const launchSendNow = Math.min(requestedSendNow || 25, policy.availableNow);
+      const latestBatch = (await listOutboxBatches(brand.id, 1))[0] ?? null;
+      const latestCreatedAtMs = latestBatch ? Date.parse(latestBatch.run.createdAt) : 0;
+      const cooldownMs = cooldownHours * 60 * 60 * 1000;
+      if (Number.isFinite(latestCreatedAtMs) && latestCreatedAtMs > 0 && Date.now() - latestCreatedAtMs < cooldownMs) {
+        const skip = outboxAutopilotSkip({
+          brand,
+          reason: "cooldown_active",
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        });
+        skip.queueAvailable = queueFill?.available;
+        skip.queueReady = queueFill?.readyAfter;
+        skip.queueInserted = queueFill?.inserted;
+        skip.queueReason = queueFill?.reason || "queue_empty_or_unavailable";
+        results.push(skip);
+        continue;
+      }
+
       if (queueEnabled && queueFill?.available) {
         const reservation = await reserveQueuedOutboxProspects({
           brandId: brand.id,
@@ -3612,61 +3662,138 @@ export async function runOutboxAutopilotTick(limit = 1): Promise<OutboxAutopilot
         }
       }
 
-      const latestBatch = (await listOutboxBatches(brand.id, 1))[0] ?? null;
-      const latestCreatedAtMs = latestBatch ? Date.parse(latestBatch.run.createdAt) : 0;
-      const cooldownMs = cooldownHours * 60 * 60 * 1000;
-      if (Number.isFinite(latestCreatedAtMs) && latestCreatedAtMs > 0 && Date.now() - latestCreatedAtMs < cooldownMs) {
+      const placementFailed =
+        policy.placement.latestProbeStatus === "failed" ||
+        policy.placement.reason.includes("placement_monitor_pool") ||
+        policy.placement.reason.includes("placement_recent_probe_failed") ||
+        policy.placement.reason.includes("placement_latest_probe_failed");
+      if (placementFailed) {
         const skip = outboxAutopilotSkip({
           brand,
-          reason: "cooldown_active",
+          reason: `placement_not_proven_no_airscale_spend:${policy.placement.reason}`,
           senderAccountId: selectedSender.accountId,
           cooldownHours,
         });
         skip.queueAvailable = queueFill?.available;
         skip.queueReady = queueFill?.readyAfter;
-        skip.queueInserted = queueFill?.inserted;
-        skip.queueReason = queueFill?.reason || "queue_empty_or_unavailable";
+        skip.queueInserted = 0;
+        skip.queueReason = queueFill?.reason || policy.placement.lastError || "placement_probe_failed";
         results.push(skip);
         continue;
       }
 
-      const launchMaxProspects = outboxAutopilotProspectRequestSize({
-        maxProspects,
-        sendNow: launchSendNow,
-        availableNow: policy.availableNow,
-      });
-      const launch = await launchOutboxBatch({
+      const spendBlock = await recentOutboxAirscaleSpendBlock(brand.id);
+      if (spendBlock.blocked) {
+        const skip = outboxAutopilotSkip({
+          brand,
+          reason: spendBlock.reason,
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        });
+        skip.queueAvailable = queueFill?.available;
+        skip.queueReady = queueFill?.readyAfter;
+        skip.queueInserted = 0;
+        skip.queueReason = queueFill?.reason || spendBlock.reason;
+        results.push(skip);
+        continue;
+      }
+
+      if (!queueEnabled || queueFill?.available === false) {
+        const skip = outboxAutopilotSkip({
+          brand,
+          reason: queueFill?.reason || "outbox_queue_unavailable_no_live_airscale_fallback",
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        });
+        skip.queueAvailable = queueFill?.available;
+        skip.queueReady = queueFill?.readyAfter;
+        skip.queueInserted = 0;
+        skip.queueReason = queueFill?.reason || "queue_disabled";
+        results.push(skip);
+        continue;
+      }
+
+      queueFill = await fillOutboxProspectQueueForBrand({
         brandId: brand.id,
         senderAccountId: selectedSender.accountId,
         batchName,
-        sourceMode: "auto",
-        prospectQuery: targetAudience,
-        prospectOffer: offer,
-        maxProspects: launchMaxProspects,
-        subject: "",
-        body: "",
-        requestedSendNow: launchSendNow,
-        timezone,
+        targetAudience,
+        offer,
+        targetReady: launchSendNow,
+        maxSourceNow: Math.max(1, Math.min(launchSendNow, maxProspects, queueMaxSourceNow)),
+        ttlDays: queueTtlDays,
       });
-      results.push({
+
+      const reservation = await reserveQueuedOutboxProspects({
         brandId: brand.id,
-        brandName: brand.name,
-        action: "launch",
-        reason: "auto_sourced_batch_launched",
-        senderAccountId: selectedSender.accountId,
-        sent: launch.counts.sent,
-        held: launch.counts.held,
-        failed: launch.counts.failed,
-        sourced: launch.counts.sourced,
-        found: launch.counts.found,
-        batchId: launch.batchId,
-        cooldownHours,
-        queueAvailable: queueFill?.available,
-        queueReady: queueFill?.readyAfter,
-        queueInserted: queueFill?.inserted,
-        queueReserved: 0,
-        queueReason: queueFill?.reason || "legacy_live_source_fallback",
+        limit: launchSendNow,
       });
+      if (!reservation.contacts.length) {
+        const skip = outboxAutopilotSkip({
+          brand,
+          reason: queueFill.reason || reservation.reason || "no_eligible_queued_prospects_after_bounded_fill",
+          senderAccountId: selectedSender.accountId,
+          cooldownHours,
+        });
+        skip.queueAvailable = queueFill.available;
+        skip.queueReady = queueFill.readyAfter;
+        skip.queueInserted = queueFill.inserted;
+        skip.queueReserved = 0;
+        skip.queueReason = reservation.reason || queueFill.reason;
+        results.push(skip);
+        continue;
+      }
+
+      try {
+        const launch = await launchOutboxBatch({
+          brandId: brand.id,
+          senderAccountId: selectedSender.accountId,
+          batchName,
+          sourceMode: "auto",
+          prospectQuery: targetAudience,
+          prospectOffer: offer,
+          maxProspects: reservation.contacts.length,
+          subject: "",
+          body: "",
+          requestedSendNow: reservation.contacts.length,
+          timezone,
+          preparedContacts: reservation.contacts,
+          preparedFinder: queueFill.finder,
+          preparedProspectSourcing: queueFill.prospectSourcing,
+        });
+        await markQueuedProspectsAfterLaunch(reservation.prospects, launch);
+        results.push({
+          brandId: brand.id,
+          brandName: brand.name,
+          action: "launch",
+          reason: "bounded_queue_batch_launched",
+          senderAccountId: selectedSender.accountId,
+          sent: launch.counts.sent,
+          held: launch.counts.held,
+          failed: launch.counts.failed,
+          sourced: queueFill.sourced,
+          found: launch.counts.found,
+          batchId: launch.batchId,
+          cooldownHours,
+          queueAvailable: queueFill.available,
+          queueReady: Math.max(0, queueFill.readyAfter - reservation.contacts.length),
+          queueInserted: queueFill.inserted,
+          queueReserved: reservation.contacts.length,
+          queueReason: queueFill.reason || reservation.reason,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "bounded_queued_launch_failed";
+        if (/dedupe|duplicate_recent_outbox_recipient|no sendable contacts after dedupe/i.test(reason)) {
+          await updateQueuedOutboxProspects(reservation.prospects.map((prospect) => prospect.id), {
+            status: "rejected",
+            rejectedReason: compactText(reason, 500),
+            lastError: compactText(reason, 500),
+          });
+        } else {
+          await releaseQueuedProspectReservation(reservation.prospects, reason);
+        }
+        throw error;
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : "outbox_autopilot_failed";
       if (isNoSendableOutboxError(reason)) {

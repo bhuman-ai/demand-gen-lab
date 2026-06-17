@@ -3,7 +3,12 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 const TABLE_INTERNAL_CRON_RUNS = "demanddev_internal_cron_runs";
 
+function envFlag(name: string) {
+  return ["1", "true", "yes", "on"].includes(String(process.env[name] ?? "").trim().toLowerCase());
+}
+
 export function isInternalCronAuthorized(request: Request) {
+  if (envFlag("LASTB2B_AUTOMATION_STOPPED")) return false;
   const tokens = [process.env.OUTREACH_CRON_TOKEN, process.env.CRON_SECRET]
     .map((value) => String(value ?? "").trim())
     .filter(Boolean);

@@ -3621,6 +3621,25 @@ export async function listRunLeads(runId: string): Promise<OutreachRunLead[]> {
   return store.runLeads.filter((row) => row.runId === runId);
 }
 
+export async function listBrandRunLeads(brandId: string): Promise<OutreachRunLead[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_RUN_LEAD)
+      .select("*")
+      .eq("brand_id", brandId)
+      .order("updated_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((entry: unknown) => mapRunLeadRow(entry));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.runLeads
+    .filter((row) => row.brandId === brandId)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
 export async function loadHistoricalCompanyDomains(
   companies: string[]
 ): Promise<Array<{ company: string; domain: string; sampleCount: number; updatedAt: string }>> {
@@ -3856,6 +3875,25 @@ export async function listRunMessages(runId: string): Promise<OutreachMessage[]>
   return store.messages
     .filter((row) => row.runId === runId)
     .sort((a, b) => (a.scheduledAt < b.scheduledAt ? -1 : 1));
+}
+
+export async function listBrandMessages(brandId: string): Promise<OutreachMessage[]> {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase
+      .from(TABLE_MESSAGE)
+      .select("*")
+      .eq("brand_id", brandId)
+      .order("updated_at", { ascending: false });
+    if (!error) {
+      return (data ?? []).map((row: unknown) => mapMessageRow(row));
+    }
+  }
+
+  const store = await readLocalStore();
+  return store.messages
+    .filter((row) => row.brandId === brandId)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
 
 export async function listRunIdsForMessageStatuses(

@@ -24,7 +24,6 @@ import {
 import {
   buildSenderRoutingSignalFromDomainRow,
   rankSenderRoutingSignals,
-  summarizeSenderRoutingScore,
   type SenderRoutingSignals,
 } from "@/lib/sender-routing";
 import {
@@ -46,15 +45,11 @@ import type {
 import {
   PageIntro,
   SectionPanel,
-  StatLedger,
 } from "@/components/ui/page-layout";
-import { ExplainableHint } from "@/components/ui/explainable-hint";
 import type { SenderCapacitySnapshot } from "@/lib/sender-capacity";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const FILTERS = ["all", "queued", "warming", "attention", "ready"] as const;
 
-type SenderFilter = (typeof FILTERS)[number];
 type RoutingRole = "primary" | "standby" | "blocked" | "pending";
 type SenderCardStatus = "ready" | "warming" | "setup" | "fix" | "protected";
 type SenderHealthTone = "good" | "watch" | "checking" | "problem";
@@ -65,7 +60,6 @@ type SenderActionKind =
   | "open_settings"
   | "add_inbox"
   | "verify_gmail_ui";
-type SenderBadgeVariant = "default" | "success" | "accent" | "muted" | "danger";
 type HealthDimension = "domainHealth" | "emailHealth" | "ipHealth" | "messagingHealth";
 type HealthSummaryDimension =
   | "domainHealthSummary"
@@ -98,7 +92,6 @@ type SenderProvisioningSnapshot = {
   headline: string;
   detail: string;
   etaLabel: string;
-  nextStep: string;
   summary: string;
 };
 type AssignmentMap = Record<
@@ -124,10 +117,6 @@ const EMPTY_SENDER_ACTION_STATE: SenderActionState = {
   error: "",
   success: "",
 };
-
-function formatCount(value: number) {
-  return value.toString().padStart(2, "0");
-}
 
 function stripUrl(value?: string) {
   if (!value) return "";
@@ -290,39 +279,6 @@ function automationTimingLabel(row: DomainRow) {
   return row.role === "brand" ? "No sender checks scheduled" : "Awaiting first automated check";
 }
 
-function filterBucket(
-  row: DomainRow,
-  capacity?: SenderCapacitySnapshot | null,
-  readiness?: SenderReadiness | null
-): Exclude<SenderFilter, "all"> {
-  if (row.role === "brand") return "ready";
-  if (readiness?.lifecycle === "blocked") return "attention";
-  if (readiness?.lifecycle === "setup") return "queued";
-  if (readiness?.lifecycle === "warming") return "warming";
-  if (readiness?.lifecycle === "ready") return "ready";
-  if (capacity?.domainLimitBlocked) return "attention";
-  const status = derivedAutomationStatus(row);
-  if (status === "attention") return "attention";
-  if (status === "warming") return "warming";
-  if (status === "ready") return "ready";
-  return "queued";
-}
-
-function filterLabel(filter: SenderFilter) {
-  if (filter === "all") return "All senders";
-  if (filter === "queued") return "Setting up";
-  if (filter === "warming") return "Warming up";
-  if (filter === "attention") return "Needs fix";
-  return "Ready to send";
-}
-
-function routingRoleBadgeVariant(role: RoutingRole) {
-  if (role === "primary") return "success";
-  if (role === "standby") return "accent";
-  if (role === "blocked") return "danger";
-  return "muted";
-}
-
 function senderSetupLine(row: DomainRow) {
   const parts: string[] = [];
   if (getDomainDeliveryAccountName(row)) parts.push(`Mailer ${getDomainDeliveryAccountName(row)}`);
@@ -374,26 +330,24 @@ function senderProvisioningSnapshot(row: DomainRow, account: OutreachAccount | n
   const mailboxStatus = account.config.mailbox.status;
   const startedLabel = formatElapsed(row.lastProvisionedAt || account.updatedAt || account.createdAt);
   const standardEta = startedLabel
-    ? `Started ${startedLabel}. Mailpool usually finishes this in about 10-15 minutes.`
-    : "Mailpool usually finishes this in about 10-15 minutes.";
+    ? `Started ${startedLabel}. This usually finishes in about 10-15 minutes.`
+    : "This usually finishes in about 10-15 minutes.";
 
   if (mailpoolStatus === "pending") {
     return {
       headline: "Pending setup",
-      detail: "Mailpool is still creating the mailbox and sender credentials.",
+      detail: "LastB2B is still creating the mailbox and sender credentials.",
       etaLabel: standardEta,
-      nextStep: "Wait for setup",
-      summary: `Mailpool is still creating the mailbox and sender credentials. ${standardEta}`,
+      summary: `LastB2B is still creating the mailbox and sender credentials. ${standardEta}`,
     };
   }
 
   if (mailpoolStatus === "updating") {
     return {
       headline: "Updating setup",
-      detail: "Mailpool is updating the sender configuration before this inbox can send.",
+      detail: "LastB2B is updating the sender configuration before this inbox can send.",
       etaLabel: standardEta,
-      nextStep: "Wait for update",
-      summary: `Mailpool is updating the sender configuration before this inbox can send. ${standardEta}`,
+      summary: `LastB2B is updating the sender configuration before this inbox can send. ${standardEta}`,
     };
   }
 
@@ -404,9 +358,8 @@ function senderProvisioningSnapshot(row: DomainRow, account: OutreachAccount | n
       etaLabel: startedLabel
         ? `Started ${startedLabel}. This usually clears a few minutes after provisioning finishes.`
         : "This usually clears a few minutes after provisioning finishes.",
-      nextStep: "Refresh status",
       summary:
-        "The mailbox exists, but the sending connection is still coming online. This sender will stay blocked until Mailpool finishes the connection.",
+        "The mailbox exists, but the sending connection is still coming online. LastB2B will keep checking it automatically.",
     };
   }
 
@@ -415,9 +368,9 @@ function senderProvisioningSnapshot(row: DomainRow, account: OutreachAccount | n
 
 function senderCardStatusLabel(status: SenderCardStatus) {
   if (status === "ready") return "Can send";
-  if (status === "warming") return "Warming up";
+  if (status === "warming") return "Low volume";
   if (status === "setup") return "Setting up";
-  if (status === "fix") return "Fix this";
+  if (status === "fix") return "Needs attention";
   return "Replies only";
 }
 
@@ -453,7 +406,7 @@ function senderRouteLabel(
     if (row.dnsStatus === "configured") return "Checking DNS";
     return "Running checks";
   }
-  if (status === "warming") return "Warming up";
+  if (status === "warming") return "Low volume";
   if (role === "primary") return "Sending now";
   if (role === "standby") return "Backup ready";
   if (role === "blocked") return "Paused";
@@ -473,7 +426,7 @@ function senderRouteDetail(
   if (provisioning) return provisioning.etaLabel;
   if (capacity?.domainLimitBlocked) return `Only ${capacity.activeSenderLimitPerDomain} inboxes can send on this domain`;
   if (status === "fix") {
-    if (readiness?.primaryBlockingReason) return readiness.primaryBlockingReason;
+    if (readiness?.primaryBlockingReason) return userFacingBlocker(readiness.primaryBlockingReason);
     if (row.dnsStatus === "error") return "Warmup cannot start";
     if (isMonitorInboxIssue(row)) return "Checks are paused";
     if (health === "problem") return "Out of rotation";
@@ -489,13 +442,6 @@ function senderRouteDetail(
   if (role === "standby") return "Healthy backup";
   if (role === "blocked") return "Out of rotation";
   return "Ready when needed";
-}
-
-function senderRouteVariant(status: SenderCardStatus, role: RoutingRole) {
-  if (status === "fix") return "danger";
-  if (status === "warming") return "accent";
-  if (status === "ready") return routingRoleBadgeVariant(role);
-  return "muted";
 }
 
 function senderHealthSignals(row: DomainRow) {
@@ -529,50 +475,13 @@ function senderOverallHealthLabel(status: SenderHealthTone) {
   return "Checking";
 }
 
-function senderOverallHealthVariant(status: SenderHealthTone) {
-  if (status === "good") return "success";
-  if (status === "watch") return "accent";
-  if (status === "problem") return "danger";
-  return "muted";
-}
-
-function senderHealthDisplay(
-  row: DomainRow,
-  status: SenderCardStatus,
-  health: SenderHealthTone,
-  provisioning: SenderProvisioningSnapshot | null
-): { badgeLabel: string; cardLabel: string; detail: string; variant: SenderBadgeVariant } {
-  if (provisioning) {
-    return {
-      badgeLabel: "Setting up",
-      cardLabel: "Pending",
-      detail: provisioning.etaLabel,
-      variant: "muted",
-    };
+function userFacingBlocker(reason?: string | null) {
+  const text = reason?.trim();
+  if (!text) return "";
+  if (/activate the assigned delivery account/i.test(text)) {
+    return "LastB2B is reconnecting this sender before it can send.";
   }
-
-  if (status === "fix" && isMonitorInboxIssue(row)) {
-    return {
-      badgeLabel: "Sender okay",
-      cardLabel: "Sender okay",
-      detail: "Blocked only because checks need another inbox",
-      variant: "success",
-    };
-  }
-
-  return {
-    badgeLabel: senderOverallHealthLabel(health),
-    cardLabel: senderOverallHealthLabel(health),
-    detail:
-      health === "good"
-        ? "Looks healthy"
-        : health === "watch"
-          ? "Usable, but watch it"
-          : health === "problem"
-            ? "Fix before sending"
-            : "Still gathering signal",
-    variant: senderOverallHealthVariant(health),
-  };
+  return text;
 }
 
 function senderTodaySummary(
@@ -593,7 +502,7 @@ function senderTodaySummary(
     return { value: "0", detail: `domain capped at ${capacity.activeSenderLimitPerDomain}` };
   }
   if (status === "fix") {
-    return { value: "0", detail: readiness?.primaryBlockingReason || "paused today" };
+    return { value: "0", detail: userFacingBlocker(readiness?.primaryBlockingReason) || "paused today" };
   }
   if (status === "setup") {
     return { value: "0", detail: "not ready yet" };
@@ -602,30 +511,6 @@ function senderTodaySummary(
     return { value: String(cap), detail: `${capacity?.dailySent ?? 0} used · warmup cap` };
   }
   return { value: String(cap), detail: `${capacity?.dailySent ?? 0} used today` };
-}
-
-function senderNextStep(
-  row: DomainRow,
-  status: SenderCardStatus,
-  health: SenderHealthTone,
-  provisioning: SenderProvisioningSnapshot | null,
-  capacity?: SenderCapacitySnapshot | null
-) {
-  if (status === "protected") return "Replies land here";
-  if (provisioning) return provisioning.nextStep;
-  if (capacity?.domainLimitBlocked) return "Reduce to 3 active inboxes";
-  if (status === "fix") {
-    if (row.dnsStatus === "error") return "Fix DNS";
-    if (health === "problem") return "Fix health";
-    return "Review sender";
-  }
-  if (status === "setup") {
-    if (!row.fromEmail) return "Attach mailbox";
-    if (row.dnsStatus !== "verified") return "Finish DNS";
-    return "Wait for checks";
-  }
-  if (status === "warming") return "Warmup runs automatically";
-  return "Keep sending";
 }
 
 function senderActionPlan(
@@ -637,6 +522,7 @@ function senderActionPlan(
   readiness?: SenderReadiness | null
 ): SenderActionPlan | null {
   if (status === "protected" || status === "ready") return null;
+  if (status === "warming" && readiness?.canSendNow) return null;
   const mailboxConfig = account ? ((account.config.mailbox ?? {}) as Record<string, unknown>) : null;
   const deliveryMethod = mailboxConfig
     ? String(mailboxConfig.deliveryMethod ?? mailboxConfig.delivery_method ?? "").trim()
@@ -644,7 +530,12 @@ function senderActionPlan(
   const gmailUiLoginState = mailboxConfig
     ? String(mailboxConfig.gmailUiLoginState ?? mailboxConfig.gmail_ui_login_state ?? "").trim()
     : "";
-  const canVerifyViaGmailUi =
+  const hasMailpoolSmtpConfig = Boolean(
+    mailboxConfig &&
+      String(mailboxConfig.smtpHost ?? mailboxConfig.smtp_host ?? "").trim() &&
+      String(mailboxConfig.smtpUsername ?? mailboxConfig.smtp_username ?? "").trim()
+  );
+  const canUseInteractiveGmailVerify =
     Boolean(
       account &&
         account.provider === "mailpool" &&
@@ -654,72 +545,95 @@ function senderActionPlan(
         row.fromEmail &&
         row.dnsStatus === "verified"
     );
+  const needsHumanGmailLogin =
+    canUseInteractiveGmailVerify &&
+    deliveryMethod === "gmail_ui" &&
+    gmailUiLoginState !== "ready" &&
+    !hasMailpoolSmtpConfig;
+  const canRefreshMailpool =
+    Boolean(
+      account &&
+        account.provider === "mailpool" &&
+        account.accountType !== "mailbox" &&
+        row.fromEmail &&
+        !isMonitorInboxIssue(row)
+    );
   if (provisioning) {
     return {
       kind: "refresh_mailpool",
-      label: "Verify sender",
+      label: "Run check now",
       description: `${provisioning.detail} ${provisioning.etaLabel}`.trim(),
     };
   }
   if (!row.fromEmail) {
     return {
       kind: "open_setup",
-      label: "Verify sender",
+      label: "Attach sender",
       description: "Open the sender flow and attach the missing mailbox.",
     };
   }
-  if (
-    canVerifyViaGmailUi &&
-    (deliveryMethod === "gmail_ui" || deliveryMethod === "smtp" || !deliveryMethod) &&
-    gmailUiLoginState !== "ready"
-  ) {
+  if (canRefreshMailpool && deliveryMethod === "gmail_ui" && gmailUiLoginState !== "ready") {
+    return {
+      kind: "refresh_mailpool",
+      label: "Run check now",
+      description: "LastB2B will refresh this sender automatically when the safer sending path is available.",
+    };
+  }
+  if (needsHumanGmailLogin) {
     return {
       kind: "verify_gmail_ui",
-      label: "Verify sender",
-      description: "Open Google sign-in here and finish verification for this sender.",
+      label: "Finish Google login",
+      description: "Google is asking for a human login before this sender can use Gmail UI delivery.",
     };
   }
   if (row.provider === "mailpool" && row.dnsStatus !== "verified") {
     return {
       kind: "refresh_mailpool",
-      label: "Verify sender",
-      description: "Pull the latest domain and mailbox state from Mailpool.",
+      label: "Run check now",
+      description: "LastB2B will pull the latest sender state automatically.",
     };
   }
   if (row.dnsStatus === "error") {
     return {
       kind: "repair_setup",
-      label: "Verify sender",
+      label: "Fix sender",
       description: "Repair sender DNS, forwarding, and connection settings for this domain.",
     };
   }
   if (row.dnsStatus !== "verified") {
     return {
       kind: "repair_setup",
-      label: "Verify sender",
+      label: "Run check now",
       description: "Re-run sender checks while this domain finishes verifying.",
     };
   }
   if (isMonitorInboxIssue(row)) {
     return {
       kind: "add_inbox",
-      label: "Verify sender",
+      label: "Add inbox",
       description: "Open the inbox flow and add 1 more reply inbox so checks can resume.",
     };
   }
   if (status === "fix" || health === "problem") {
-    if (canVerifyViaGmailUi) {
+    if (needsHumanGmailLogin) {
       return {
         kind: "verify_gmail_ui",
-        label: "Verify sender",
-        description: "Open Google sign-in here. If login is already done, finish the sender check from this panel.",
+        label: "Finish Google login",
+        description: "Google is asking for a human login before this sender can use Gmail UI delivery.",
+      };
+    }
+    if (canRefreshMailpool) {
+      return {
+        kind: "refresh_mailpool",
+        label: "Run check now",
+        description: "LastB2B will refresh this sender and keep checking health automatically.",
       };
     }
     return {
       kind: "open_settings",
-      label: "Verify sender",
+      label: "Review sender",
       description:
-        readiness?.primaryBlockingReason ||
+        userFacingBlocker(readiness?.primaryBlockingReason) ||
         "Open sender checks and review what is blocking readiness.",
     };
   }
@@ -743,12 +657,15 @@ function senderSummaryLine(
     return `This inbox is healthy, but it is intentionally idle because ${row.domain} already has ${capacity.activeSenderLimitPerDomain} active sending inboxes.`;
   }
   if (status === "fix" && readiness?.primaryBlockingReason) {
-    return readiness.primaryBlockingReason;
+    return userFacingBlocker(readiness.primaryBlockingReason);
   }
   if (status === "fix" && isMonitorInboxIssue(row)) {
     return "This sender is not broken. We just ran out of extra inboxes used to check it safely. Add 1 more inbox and checks will start again.";
   }
-  if (status === "fix" || status === "setup" || status === "warming") return automationSummary(row);
+  if (status === "warming") {
+    return "Warmup is running automatically. LastB2B will keep volume low until this sender is safer.";
+  }
+  if (status === "fix" || status === "setup") return automationSummary(row);
   if (health === "watch") {
     return "This sender can send, but one of the health signals needs watching.";
   }
@@ -803,7 +720,7 @@ function buildPendingSenderRow(brand: BrandRecord, account: OutreachAccount, mai
     warmupStage: "Provisioning",
     reputation: "Pending setup",
     automationStatus: "testing",
-    automationSummary: provisioning?.summary || "Mailpool is still provisioning this sender.",
+    automationSummary: provisioning?.summary || "LastB2B is still provisioning this sender.",
     domainHealth: "queued",
     domainHealthSummary: "Provisioning is still running, so domain health checks have not started yet.",
     emailHealth: "queued",
@@ -829,42 +746,6 @@ function buildPendingSenderRow(brand: BrandRecord, account: OutreachAccount, mai
   };
 }
 
-function RoutingScoreDetails({
-  signal,
-  align = "left",
-}: {
-  signal: SenderRoutingSignals;
-  align?: "left" | "right" | "center";
-}) {
-  const routeScore = summarizeSenderRoutingScore(signal);
-
-  return (
-    <ExplainableHint
-      label={`Explain route score for ${signal.fromEmail}`}
-      title={`Route score ${routeScore.normalizedScore}/100`}
-      align={align}
-      panelClassName="w-[min(28rem,calc(100vw-2rem))]"
-    >
-      <p>This is a normalized route score out of 100. It is not a deliverability percentage.</p>
-      <p>{routeScore.detail}</p>
-      <div className="grid gap-2 rounded-[10px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-2">
-        {routeScore.breakdown.map((item) => (
-          <div key={item.label} className="space-y-1">
-            <div className="text-[11px] uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
-              {item.label}
-            </div>
-            <div className="text-sm font-medium text-[color:var(--foreground)]">{item.value}</div>
-            <div className="text-xs leading-5 text-[color:var(--muted-foreground)]">{item.detail}</div>
-          </div>
-        ))}
-      </div>
-      <p className="text-xs text-[color:var(--muted-foreground)]">
-        Strong: 75-100. Usable: 55-74. Watch: 35-54. Weak: 0-34.
-      </p>
-    </ExplainableHint>
-  );
-}
-
 export default function NetworkClient({
   brand,
   allBrands: initialAllBrands = [],
@@ -877,7 +758,6 @@ export default function NetworkClient({
   const router = useRouter();
   const [domains, setDomains] = useState<DomainRow[]>(brand.domains || []);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<SenderFilter>("all");
   const [error, setError] = useState("");
   const [senderModalOpen, setSenderModalOpen] = useState(false);
   const [senderModalLoading, setSenderModalLoading] = useState(false);
@@ -1013,7 +893,6 @@ export default function NetworkClient({
     () => [...domains.filter((item) => item.role !== "brand"), ...syntheticPendingSenderRows],
     [domains, syntheticPendingSenderRows]
   );
-  const protectedDestination = useMemo(() => domains.find((item) => item.role === "brand") ?? null, [domains]);
   const senderCapacityByAccountId = useMemo(
     () => new Map(senderCapacitySnapshots.map((snapshot) => [snapshot.senderAccountId, snapshot] as const)),
     [senderCapacitySnapshots]
@@ -1082,9 +961,6 @@ export default function NetworkClient({
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return senderDomains.filter((item) => {
-      if (statusFilter !== "all" && filterBucket(item, capacityForRow(item), readinessForRow(item)) !== statusFilter) {
-        return false;
-      }
       if (!needle) return true;
       return [
         item.domain,
@@ -1098,22 +974,7 @@ export default function NetworkClient({
         .toLowerCase()
         .includes(needle);
     });
-  }, [capacityForRow, query, readinessForRow, senderDomains, statusFilter]);
-
-  const ledgerItems = useMemo(
-    () =>
-      FILTERS.map((filter) => ({
-        label: filterLabel(filter),
-        value: formatCount(
-          filter === "all"
-            ? senderDomains.length
-            : senderDomains.filter((item) => filterBucket(item, capacityForRow(item), readinessForRow(item)) === filter).length
-        ),
-        active: statusFilter === filter,
-        onClick: () => setStatusFilter(filter),
-      })),
-    [capacityForRow, readinessForRow, senderDomains, statusFilter]
-  );
+  }, [query, senderDomains]);
 
   const rankedRoutingSignals = useMemo(
     () =>
@@ -1151,15 +1012,27 @@ export default function NetworkClient({
     }
     return next;
   }, [preferredRoutingSignal, rankedRoutingSignals, readinessForRow, senderDomains]);
-  const blockedRoutingSignals = useMemo(
-    () =>
-      rankedRoutingSignals.filter((signal) => {
-        const row =
-          senderDomains.find((item) => getDomainDeliveryAccountId(item) === signal.senderAccountId) ?? null;
-        return Boolean(row && readinessForRow(row) && !readinessForRow(row)?.canSendNow);
-      }),
-    [rankedRoutingSignals, readinessForRow, senderDomains]
-  );
+
+  const displayedSenderDomains = useMemo(() => {
+    if (query.trim()) return filtered;
+
+    const important = filtered.filter((item) => {
+      const capacity = capacityForRow(item);
+      const readiness = readinessForRow(item);
+      const routingRole = routingRoleForRow(item, routingRoleBySenderId);
+      const status = senderCardStatus(item, routingRole, capacity, readiness);
+      return readiness?.canSendNow || status === "warming" || status === "fix";
+    });
+
+    if (important.length) return important;
+    return filtered.slice(0, 3);
+  }, [capacityForRow, filtered, query, readinessForRow, routingRoleBySenderId]);
+
+  const hiddenSenderDomains = useMemo(() => {
+    if (query.trim()) return [];
+    const displayedIds = new Set(displayedSenderDomains.map((item) => item.id));
+    return filtered.filter((item) => !displayedIds.has(item.id));
+  }, [displayedSenderDomains, filtered, query]);
   const senderSummary = useMemo(
     () =>
       senderDomains.reduce(
@@ -1214,33 +1087,6 @@ export default function NetworkClient({
       capacityForRow,
     ]
   );
-  const provisioningSenders = useMemo(
-    () =>
-      senderDomains
-        .map((row) => {
-          const account = resolveDeliveryAccountForRow(row);
-          const provisioning = senderProvisioningSnapshot(row, account);
-          return provisioning ? { row, provisioning } : null;
-        })
-        .filter((item): item is { row: DomainRow; provisioning: SenderProvisioningSnapshot } => Boolean(item)),
-    [resolveDeliveryAccountForRow, senderDomains]
-  );
-  const primaryProvisioningSender = provisioningSenders[0] ?? null;
-  const preferredReadyRoutingSignal = useMemo(() => {
-    if (!preferredRoutingSignal) return null;
-    const row =
-      senderDomains.find((item) => getDomainDeliveryAccountId(item) === preferredRoutingSignal.senderAccountId) ?? null;
-    if (!row) return null;
-    const readiness = readinessForRow(row);
-    const status = senderCardStatus(
-      row,
-      routingRoleForRow(row, routingRoleBySenderId),
-      capacityForRow(row),
-      readiness
-    );
-    return status === "ready" ? preferredRoutingSignal : null;
-  }, [capacityForRow, preferredRoutingSignal, readinessForRow, routingRoleBySenderId, senderDomains]);
-  const readyBackupCount = Math.max(0, senderSummary.readyCount - (preferredReadyRoutingSignal ? 1 : 0));
   const sendingPower = useMemo(() => {
     const evaluated = senderDomains
       .map((row) => ({ row, readiness: readinessForRow(row) }))
@@ -1258,7 +1104,6 @@ export default function NetworkClient({
       totalDailyCap,
       usedToday,
       remaining: Math.max(totalDailyCap - usedToday, 0),
-      utilization: totalDailyCap > 0 ? Math.min(1, usedToday / totalDailyCap) : 0,
       activeSenders,
     };
   }, [readinessForRow, senderDomains]);
@@ -1285,14 +1130,14 @@ export default function NetworkClient({
 
     const readySenders = evaluated.filter((entry) => entry.readiness?.canSendNow);
     if (readySenders.length) {
+      const lowVolumeOnly = readySenders.every((entry) => entry.status === "warming");
       return {
         state: "ready" as const,
-        value: "Yes",
-        detail: `${formatEmailCount(sendingPower.totalDailyCap)} available today across ${readySenders.length} sender${readySenders.length === 1 ? "" : "s"}.`,
-        note:
-          preferredReadyRoutingSignal
-            ? `${preferredReadyRoutingSignal.fromEmail} is first in line right now.`
-            : "A healthy sender is ready and available for dispatch.",
+        value: lowVolumeOnly ? "Low volume only" : "Ready to send",
+        detail: `${sendingPower.totalDailyCap} safe send${sendingPower.totalDailyCap === 1 ? "" : "s"} available today across ${readySenders.length} sender${readySenders.length === 1 ? "" : "s"}.`,
+        note: lowVolumeOnly
+          ? "LastB2B can send now, but will keep volume low while this sender builds trust."
+          : "LastB2B will use the safest available sender automatically.",
       };
     }
 
@@ -1311,7 +1156,7 @@ export default function NetworkClient({
       return {
         state: "blocked" as const,
         value: "No",
-        detail: blockedSender.readiness.primaryBlockingReason,
+        detail: userFacingBlocker(blockedSender.readiness.primaryBlockingReason),
         note: `${blockedSender.row.fromEmail || blockedSender.row.domain} is the first sender blocking outbound right now.`,
       };
     }
@@ -1342,7 +1187,6 @@ export default function NetworkClient({
     };
   }, [
     capacityForRow,
-    preferredReadyRoutingSignal,
     readinessForRow,
     resolveDeliveryAccountForRow,
     routingRoleBySenderId,
@@ -1372,6 +1216,7 @@ export default function NetworkClient({
     gmailVerifyAccountId,
     gmailVerifyLoading,
     gmailVerifyOpen,
+    gmailVerifySession,
     gmailVerifySession?.loginState,
     gmailVerifySubmitting,
   ]);
@@ -1515,15 +1360,16 @@ export default function NetworkClient({
     try {
       const resolvedDeliveryAccount = resolveDeliveryAccountForRow(row);
       const resolvedDeliveryAccountId = resolvedDeliveryAccount?.id ?? resolveDeliveryAccountIdForRow(row);
-      const canOpenGmailVerify =
+      const canOpenInteractiveGmailVerify =
         Boolean(row.fromEmail) &&
         row.dnsStatus === "verified" &&
         !isMonitorInboxIssue(row) &&
         resolvedDeliveryAccount?.provider === "mailpool" &&
         resolvedDeliveryAccount.accountType !== "mailbox" &&
-        String(resolvedDeliveryAccount.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google";
+        String(resolvedDeliveryAccount.config.mailpool.mailboxType ?? "").trim().toLowerCase() === "google" &&
+        resolvedDeliveryAccount.config.mailbox.deliveryMethod === "gmail_ui";
 
-      if ((action.kind === "verify_gmail_ui" || action.kind === "open_settings") && canOpenGmailVerify) {
+      if (action.kind === "verify_gmail_ui" && canOpenInteractiveGmailVerify) {
         if (!resolvedDeliveryAccountId) {
           throw new Error("This Gmail UI sender is missing its delivery account link.");
         }
@@ -1565,7 +1411,7 @@ export default function NetworkClient({
         await refreshDomainsFromServer();
         updateSenderActionState(row.id, {
           pending: false,
-          success: "Verification refreshed. Pulled the latest Mailpool status for this sender.",
+          success: "Checked automatically. Updated this sender's credentials and health status.",
         });
         return;
       }
@@ -1687,61 +1533,22 @@ export default function NetworkClient({
   ];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {error ? <div className="text-sm text-[color:var(--danger)]">{error}</div> : null}
 
       <PageIntro
-        title={
-          <span className="inline-flex items-center gap-2">
-            <span>Senders</span>
-            <ExplainableHint
-              label="Explain Senders"
-              title="What happens here"
-            >
-              <p>
-                This page answers four questions for every sender: can it send, how much can it send today, is it
-                healthy, and what needs to happen next.
-              </p>
-              <p>
-                You do not need to decode the internal system states. Read the big labels first, then open the details
-                only if something looks wrong.
-              </p>
-            </ExplainableHint>
-          </span>
-        }
+        title="Delivery"
         actions={
           <Button type="button" onClick={openSenderModal}>
             Add sender
           </Button>
         }
-        aside={
-          <StatLedger items={ledgerItems} />
-        }
       />
 
-      <SectionPanel
-        title={
-          <span className="inline-flex items-center gap-2">
-            <span>At a glance</span>
-            <ExplainableHint
-              label="Explain sender summary"
-              title="What this summary means"
-            >
-              <p>
-                The big card shows what can send right now and what is blocking everything else. The smaller cards tell
-                you how much ready volume you have, how many senders are still warming up, and how many need fixing.
-              </p>
-              <p>
-                Only senders marked <span className="font-medium">Can send</span> count toward ready volume today.
-              </p>
-            </ExplainableHint>
-          </span>
-        }
-        className="border-[color:var(--border-strong)]"
-      >
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_repeat(3,minmax(0,0.55fr))]">
-          <div className="space-y-3 rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:px-5">
-            <div className="flex flex-wrap items-center gap-2">
+      <SectionPanel title="Status" className="border-[color:var(--border-strong)]">
+        <div className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 md:px-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
               <Badge
                 variant={
                   brandReadiness.state === "ready"
@@ -1753,119 +1560,37 @@ export default function NetworkClient({
                         : "muted"
                 }
               >
-                Can send now
+                {brandReadiness.state === "ready"
+                  ? "Sending available"
+                  : brandReadiness.state === "provisioning"
+                    ? "Setting up"
+                    : brandReadiness.state === "blocked"
+                      ? "Needs attention"
+                      : "Waiting"}
               </Badge>
-              {preferredReadyRoutingSignal ? <RoutingScoreDetails signal={preferredReadyRoutingSignal} /> : null}
-              </div>
-            <div>
-              <div className="text-lg font-semibold text-[color:var(--foreground)]">{brandReadiness.value}</div>
-              <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">
-                {brandReadiness.detail}
-              </div>
+              <div className="mt-3 text-lg font-semibold text-[color:var(--foreground)]">{brandReadiness.value}</div>
+              <div className="mt-1 text-sm leading-6 text-[color:var(--muted-foreground)]">{brandReadiness.detail}</div>
+              <div className="mt-3 text-sm leading-6 text-[color:var(--foreground)]">{brandReadiness.note}</div>
             </div>
-            <div className="text-sm leading-6 text-[color:var(--foreground)]">
-              {brandReadiness.note}
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
-              <span>
-                {readyBackupCount} backup sender{readyBackupCount === 1 ? "" : "s"} ready
-              </span>
-              <span aria-hidden="true">•</span>
-              <span>{blockedRoutingSignals.length} paused</span>
-              {provisioningSenders.length ? (
-                <>
-                  <span aria-hidden="true">•</span>
-                  <span>
-                    {provisioningSenders.length} sender{provisioningSenders.length === 1 ? "" : "s"} still provisioning
-                  </span>
-                </>
-              ) : null}
-              {protectedDestination ? (
-                <>
-                  <span aria-hidden="true">•</span>
-                  <span>Replies land on {protectedDestination.domain}</span>
-                </>
-              ) : null}
+            <div className="shrink-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-sm">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Today</div>
+              <div className="mt-1 text-2xl font-semibold text-[color:var(--foreground)]">{sendingPower.remaining}</div>
+              <div className="text-xs leading-5 text-[color:var(--muted-foreground)]">
+                of {sendingPower.totalDailyCap} safe sends left
+              </div>
             </div>
           </div>
-          <div className="rounded-[16px] border border-[color:var(--border)] px-4 py-4 md:px-5">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-              Total sending power
-            </div>
-            <div className="mt-3 flex items-end justify-between gap-3">
-              <div className="text-3xl font-semibold text-[color:var(--foreground)]">{sendingPower.totalDailyCap}</div>
-              <div className="text-right text-xs text-[color:var(--muted-foreground)]">
-                {sendingPower.totalDailyCap
-                  ? `${sendingPower.usedToday} used today`
-                  : primaryProvisioningSender
-                    ? "Pending setup"
-                    : "No sender capacity yet"}
-              </div>
-            </div>
-            <div className="mt-3">
-              <div className="h-2.5 overflow-hidden rounded-full bg-[color:var(--surface-muted)]">
-                <div
-                  className="h-full rounded-full bg-[color:var(--foreground)] transition-[width] duration-300"
-                  style={{
-                    width:
-                      sendingPower.totalDailyCap > 0 && sendingPower.usedToday > 0
-                        ? `${Math.max(6, Math.round(sendingPower.utilization * 100))}%`
-                        : "0%",
-                  }}
-                />
-              </div>
-              <div className="mt-2 flex items-center justify-between text-xs text-[color:var(--muted-foreground)]">
-                <span>{sendingPower.usedToday} used</span>
-                <span>{sendingPower.totalDailyCap} total</span>
-              </div>
-            </div>
-            <div className="mt-2 text-sm leading-6 text-[color:var(--muted-foreground)]">
-              {sendingPower.totalDailyCap
-                ? `${formatEmailCount(sendingPower.totalDailyCap)} of enforced daily sending power across ${sendingPower.activeSenders} active sender${sendingPower.activeSenders === 1 ? "" : "s"}. ${formatEmailCount(sendingPower.remaining)} left today.`
-                : primaryProvisioningSender
-                  ? primaryProvisioningSender.provisioning.etaLabel
-                  : "No sender is fully ready yet."}
-            </div>
-          </div>
-          <div className="rounded-[16px] border border-[color:var(--border)] px-4 py-4 md:px-5">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Warming up</div>
-            <div className="mt-3 text-3xl font-semibold text-[color:var(--foreground)]">{senderSummary.warmingCount}</div>
-            <div className="mt-2 text-sm leading-6 text-[color:var(--muted-foreground)]">
-              {senderSummary.warmingCount
-                ? "These senders are building trust before they take normal traffic."
-                : "Nothing is in warmup right now."}
-            </div>
-          </div>
-          <div className="rounded-[16px] border border-[color:var(--border)] px-4 py-4 md:px-5">
-            <div className="text-[11px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">Needs fix</div>
-            <div className="mt-3 text-3xl font-semibold text-[color:var(--foreground)]">{senderSummary.fixCount}</div>
-            <div className="mt-2 text-sm leading-6 text-[color:var(--muted-foreground)]">
-              {senderSummary.fixCount
-                ? "These senders are paused until you fix setup or health issues."
-                : "No sender is blocked right now."}
-            </div>
+          <div className="mt-4 flex flex-wrap gap-x-3 gap-y-1 text-xs text-[color:var(--muted-foreground)]">
+            <span>{sendingPower.activeSenders} can send today</span>
+            <span>{senderSummary.warmingCount} low volume</span>
+            <span>{senderSummary.fixCount} need attention</span>
+            <span>{senderSummary.setupCount} setting up</span>
           </div>
         </div>
       </SectionPanel>
 
       <SectionPanel
-        title={
-          <span className="inline-flex items-center gap-2">
-            <span>All senders</span>
-            <ExplainableHint
-              label="Explain sender cards"
-              title="How to read these cards"
-            >
-              <p>
-                Each card answers four questions in order: can this sender send, how much can it send today, is it
-                healthy, and what should happen next.
-              </p>
-              <p>
-                Open the details only when you need the deeper system explanation.
-              </p>
-            </ExplainableHint>
-          </span>
-        }
+        title="Senders"
         className="border-[color:var(--border-strong)]"
         actions={
           <Input
@@ -1876,9 +1601,9 @@ export default function NetworkClient({
           />
         }
       >
-        {filtered.length ? (
+        {displayedSenderDomains.length ? (
           <div className="space-y-3">
-            {filtered.map((item) => {
+            {displayedSenderDomains.map((item) => {
               const account = resolveDeliveryAccountForRow(item);
               const capacity = capacityForRow(item);
               const routingRole = routingRoleForRow(item, routingRoleBySenderId);
@@ -1886,25 +1611,18 @@ export default function NetworkClient({
               const status = senderCardStatus(item, routingRole, capacity, readiness);
               const overallHealth = senderOverallHealth(item);
               const provisioning = senderProvisioningSnapshot(item, account);
-              const healthDisplay = senderHealthDisplay(item, status, overallHealth, provisioning);
               const today = senderTodaySummary(item, status, provisioning, capacity, readiness);
               const action = senderActionPlan(item, status, overallHealth, provisioning, account, readiness);
               const passiveAction =
                 !action && status === "warming"
                   ? {
-                      heading: "Verified",
-                      value: "No action needed",
                       description: "This sender is already verified. Warmup is automatic right now.",
                     }
                   : !action && status === "ready"
                     ? {
-                        heading: "Ready",
-                        value: "No action needed",
                         description: "This sender is healthy and ready. You do not need to do anything here.",
                       }
                     : null;
-              const nextStep =
-                action?.label ?? passiveAction?.value ?? senderNextStep(item, status, overallHealth, provisioning, capacity);
               const healthSignals = senderHealthSignals(item);
               const setupLine = provisioning
                 ? `${provisioning.headline} · ${provisioning.etaLabel}`
@@ -1914,82 +1632,30 @@ export default function NetworkClient({
               const maxDailyCap = senderMaxDailyCap(capacity);
               const warmupStage = senderWarmupStageLabel(item, capacity);
               const actionState = senderActionState[item.id] ?? EMPTY_SENDER_ACTION_STATE;
-              const statusHeading = status === "fix" || status === "setup" ? "Issue" : "Status";
-              const nextStepHeading = action ? "Verify" : passiveAction?.heading ?? "Next step";
               const outboundEnabled = isOutreachOutboundEnabled(account);
+              const summaryLine = senderSummaryLine(item, status, routingRole, overallHealth, provisioning, capacity, readiness);
+              const routeLabel = senderRouteLabel(routingRole, item, status, overallHealth, provisioning, capacity, readiness);
+              const routeDetail = senderRouteDetail(routingRole, item, status, overallHealth, provisioning, capacity, readiness);
 
               return (
                 <article
                   key={item.id}
                   className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4 md:px-5 md:py-5"
                 >
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0 xl:max-w-[26rem]">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={senderCardStatusVariant(status)}>{senderCardStatusLabel(status)}</Badge>
-                        <Badge variant={senderRouteVariant(status, routingRole)}>
-                          {senderRouteLabel(routingRole, item, status, overallHealth, provisioning, capacity, readiness)}
-                        </Badge>
-                        <Badge variant={healthDisplay.variant}>{healthDisplay.badgeLabel}</Badge>
-                      </div>
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <Badge variant={senderCardStatusVariant(status)}>{senderCardStatusLabel(status)}</Badge>
                       <div className="mt-3 text-lg font-semibold text-[color:var(--foreground)]">{item.domain}</div>
                       <div className="mt-1 text-sm text-[color:var(--foreground)]">{item.fromEmail || "Mailbox pending"}</div>
-                      {account ? (
-                        <label className="mt-3 inline-flex items-center gap-2 text-xs text-[color:var(--foreground)]">
-                          <input
-                            type="checkbox"
-                            role="switch"
-                            className="h-4 w-4"
-                            checked={outboundEnabled}
-                            disabled={Boolean(outboundToggleByAccountId[account.id])}
-                            onChange={(event) => void handleSenderOutboundToggle(account, event.target.checked)}
-                          />
-                          <span>{outboundEnabled ? "Outbound on" : "Outbound off"}</span>
-                        </label>
-                      ) : null}
-                      {setupLine ? (
-                        <div className="mt-2 text-xs leading-5 text-[color:var(--muted-foreground)]">{setupLine}</div>
-                      ) : null}
-                      <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                        {item.replyMailboxEmail
-                          ? `Replies go to ${item.replyMailboxEmail}`
-                          : "Replies show up after the sender mailbox is attached."}
-                      </div>
+                      <p className="mt-3 max-w-3xl text-sm leading-6 text-[color:var(--foreground)]">{summaryLine}</p>
                     </div>
 
-                    <div className="grid flex-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Today</div>
-                        <div className="mt-2 text-2xl font-semibold text-[color:var(--foreground)]">{today.value}</div>
-                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">{today.detail}</div>
-                      </div>
-                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Health</div>
-                        <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">{healthDisplay.cardLabel}</div>
-                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">{healthDisplay.detail}</div>
-                      </div>
-                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{statusHeading}</div>
-                        <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">
-                          {senderRouteLabel(routingRole, item, status, overallHealth, provisioning, capacity, readiness)}
-                        </div>
-                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                          {senderRouteDetail(routingRole, item, status, overallHealth, provisioning, capacity, readiness)}
-                        </div>
-                      </div>
-                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{nextStepHeading}</div>
-                        <div className="mt-2 text-xl font-semibold text-[color:var(--foreground)]">{nextStep}</div>
-                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                          {action?.description ?? automationTimingLabel(item)}
-                        </div>
-                      </div>
+                    <div className="shrink-0 rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 sm:min-w-[10rem]">
+                      <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Today</div>
+                      <div className="mt-1 text-2xl font-semibold text-[color:var(--foreground)]">{today.value}</div>
+                      <div className="text-xs leading-5 text-[color:var(--muted-foreground)]">{today.detail}</div>
                     </div>
                   </div>
-
-                  <p className="mt-4 text-sm leading-6 text-[color:var(--foreground)]">
-                    {senderSummaryLine(item, status, routingRole, overallHealth, provisioning, capacity, readiness)}
-                  </p>
 
                   {action ? (
                     <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -2001,7 +1667,7 @@ export default function NetworkClient({
                             ? "outline"
                             : action.kind === "add_inbox"
                               ? "default"
-                              : status === "fix"
+                              : action.kind === "verify_gmail_ui" && status === "fix"
                                 ? "danger"
                                 : "default"
                         }
@@ -2030,53 +1696,106 @@ export default function NetworkClient({
                     </div>
                   ) : null}
 
-                  <div className="mt-4 flex flex-wrap items-center gap-2">
-                    {healthSignals.map(([label, value]) => (
-                      <div
-                        key={label}
-                        className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1.5"
-                      >
-                        <span className="text-[10px] uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
-                          {label}
-                        </span>
-                        <Badge variant={healthBadgeVariant(value)}>{friendlyHealthLabel(value)}</Badge>
+                  <details className="mt-4 border-t border-[color:var(--border)] pt-3">
+                    <summary className="cursor-pointer text-sm font-medium text-[color:var(--muted-foreground)]">
+                      Details
+                    </summary>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">State</div>
+                        <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">{routeLabel}</div>
+                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">{routeDetail}</div>
                       </div>
-                    ))}
-                    <ExplainableHint
-                      label={`Explain sender status for ${item.domain}`}
-                      title={`${item.domain} details`}
-                      align="right"
-                    >
-                      <p>
-                        <span className="font-medium">What this means:</span> {automationSummary(item)}
-                      </p>
-                      {healthSignals.map(([label, , summary]) => (
-                        <p key={label}>
-                          <span className="font-medium">{label}:</span> {summary}
-                        </p>
+                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Checks</div>
+                        <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
+                          {senderOverallHealthLabel(overallHealth)}
+                        </div>
+                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                          {automationTimingLabel(item)}
+                        </div>
+                      </div>
+                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Warmup</div>
+                        <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">{warmupStage}</div>
+                        <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                          {dailyCap ? `${formatEmailCount(dailyCap)} allowed today on day ${warmupDay}.` : "No sending cap yet."}{" "}
+                          {maxDailyCap ? `${formatEmailCount(maxDailyCap)} after warmup.` : ""}
+                        </div>
+                      </div>
+                      <div className="rounded-[12px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3">
+                        <div className="text-[10px] uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Replies</div>
+                        <div className="mt-1 text-sm font-medium text-[color:var(--foreground)]">
+                          {item.replyMailboxEmail || "Not attached yet"}
+                        </div>
+                        {setupLine ? (
+                          <div className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">{setupLine}</div>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {healthSignals.map(([label, value, summary]) => (
+                        <span
+                          key={label}
+                          title={summary}
+                          className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1.5"
+                        >
+                          <span className="text-[10px] uppercase tracking-[0.12em] text-[color:var(--muted-foreground)]">
+                            {label}
+                          </span>
+                          <Badge variant={healthBadgeVariant(value)}>{friendlyHealthLabel(value)}</Badge>
+                        </span>
                       ))}
-                      <p>
-                        <span className="font-medium">Warmup:</span> {warmupStage}.
-                      </p>
-                      <p>
-                        <span className="font-medium">Current cap:</span>{" "}
-                        {dailyCap ? `${formatEmailCount(dailyCap)} on warmup day ${warmupDay}.` : "No sending cap yet."}
-                      </p>
-                      <p>
-                        <span className="font-medium">Max eventual cap:</span>{" "}
-                        {maxDailyCap ? `${formatEmailCount(maxDailyCap)} after warmup completes.` : "Not set."}
-                      </p>
-                    </ExplainableHint>
-                  </div>
+                    </div>
+                    {account ? (
+                      <label className="mt-3 inline-flex items-center gap-2 text-xs text-[color:var(--muted-foreground)]">
+                        <input
+                          type="checkbox"
+                          role="switch"
+                          className="h-4 w-4"
+                          checked={outboundEnabled}
+                          disabled={Boolean(outboundToggleByAccountId[account.id])}
+                          onChange={(event) => void handleSenderOutboundToggle(account, event.target.checked)}
+                        />
+                        <span>{outboundEnabled ? "Outbound enabled" : "Outbound paused"}</span>
+                      </label>
+                    ) : null}
+                  </details>
                 </article>
               );
             })}
+            {hiddenSenderDomains.length ? (
+              <details className="rounded-[16px] border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                <summary className="cursor-pointer text-sm font-medium text-[color:var(--muted-foreground)]">
+                  Show {hiddenSenderDomains.length} sender{hiddenSenderDomains.length === 1 ? "" : "s"} still setting up
+                </summary>
+                <div className="mt-3 divide-y divide-[color:var(--border)]">
+                  {hiddenSenderDomains.map((item) => {
+                    const capacity = capacityForRow(item);
+                    const readiness = readinessForRow(item);
+                    const routingRole = routingRoleForRow(item, routingRoleBySenderId);
+                    const status = senderCardStatus(item, routingRole, capacity, readiness);
+                    return (
+                      <div key={item.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="text-sm font-medium text-[color:var(--foreground)]">
+                            {item.fromEmail || item.domain}
+                          </div>
+                          <div className="text-xs text-[color:var(--muted-foreground)]">{item.domain}</div>
+                        </div>
+                        <Badge variant={senderCardStatusVariant(status)}>{senderCardStatusLabel(status)}</Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : (
           <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-6 text-sm text-[color:var(--muted-foreground)]">
             {senderDomains.length
-              ? "No senders match the current filter."
-              : "No senders yet. Add one to start setup, DNS checks, warmup, and sending."}
+              ? "No senders match this search."
+              : "No senders yet. Add one when you want more sending capacity."}
           </div>
         )}
       </SectionPanel>
@@ -2088,7 +1807,7 @@ export default function NetworkClient({
           if (!open) setSenderModalError("");
         }}
         title="Add sender"
-        description="Buy or attach a sender domain, provision the mailbox, and assign it to this brand."
+        description="Add more sending capacity for this brand."
         panelClassName="max-w-6xl"
         bodyClassName="p-0"
       >
@@ -2145,8 +1864,8 @@ export default function NetworkClient({
             }
           }
         }}
-        title={gmailVerifyRow?.fromEmail ? `Verify ${gmailVerifyRow.fromEmail}` : "Verify sender"}
-        description="One step at a time: we will tell you what Google is asking for, then finish the sender when the inbox is ready."
+        title={gmailVerifyRow?.fromEmail ? `Finish Google login for ${gmailVerifyRow.fromEmail}` : "Finish Google login"}
+        description="Only use this when Google asks for a human login. Normal Mailpool sender checks run automatically."
         panelClassName="max-w-3xl"
       >
         <div className="space-y-4">

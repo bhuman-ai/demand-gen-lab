@@ -84,6 +84,14 @@ function hasBlockingGmailUiLoginState(config: OutreachAccountConfig) {
   );
 }
 
+function mailpoolMailboxHasSmtpDelivery(mailbox: MailpoolMailbox, fallbackUsername: string) {
+  return Boolean(
+    String(mailbox.smtpHost ?? "").trim() &&
+      (String(mailbox.smtpUsername ?? "").trim() || fallbackUsername.trim()) &&
+      String(mailbox.smtpPassword ?? mailbox.password ?? "").trim()
+  );
+}
+
 function mailpoolMailboxResourceStatus(mailbox: MailpoolMailbox) {
   const providerError = mailpoolMailboxErrorMessage(mailbox);
   const mailboxStatus = String(mailbox.status ?? "").trim().toLowerCase();
@@ -98,13 +106,24 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
   const fromEmail = mailbox.email.trim().toLowerCase();
   const usesGmailUi = existingConfig.mailbox.deliveryMethod === "gmail_ui";
   const providerError = mailpoolMailboxErrorMessage(mailbox);
-  const disabled = shouldDisableMailpoolAccount(mailbox) || hasBlockingGmailUiLoginState(existingConfig);
+  const mailboxStatus = String(mailbox.status ?? "").trim().toLowerCase();
+  const hasSmtpDelivery = mailpoolMailboxHasSmtpDelivery(mailbox, fromEmail);
+  const mailboxCanUseDelivery = !providerError && mailboxStatus !== "inactive" && mailboxStatus !== "deleted";
+  const switchGmailUiToSmtp =
+    usesGmailUi && hasBlockingGmailUiLoginState(existingConfig) && hasSmtpDelivery && mailboxCanUseDelivery;
+  const nextDeliveryMethod = switchGmailUiToSmtp
+    ? ("smtp" as const)
+    : usesGmailUi
+      ? ("gmail_ui" as const)
+      : existingConfig.mailbox.deliveryMethod;
   const loginStatus = normalizeGmailUiLoginStatus({
-    deliveryMethod: usesGmailUi ? "gmail_ui" : existingConfig.mailbox.deliveryMethod,
+    deliveryMethod: nextDeliveryMethod,
     state: existingConfig.mailbox.gmailUiLoginState,
     checkedAt: existingConfig.mailbox.gmailUiLoginCheckedAt,
     message: providerError || existingConfig.mailbox.gmailUiLoginMessage,
   });
+  const needsGmailUiLogin = nextDeliveryMethod === "gmail_ui" && loginStatus.gmailUiLoginState !== "ready";
+  const disabled = shouldDisableMailpoolAccount(mailbox) || needsGmailUiLogin;
   return {
     provider: "mailpool" as const,
     name:
@@ -133,8 +152,8 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         lastSpamCheckSummary: String(existingConfig.mailpool.lastSpamCheckSummary ?? "").trim(),
       },
       mailbox: {
-        provider: usesGmailUi ? ("gmail" as const) : ("imap" as const),
-        deliveryMethod: usesGmailUi ? ("gmail_ui" as const) : existingConfig.mailbox.deliveryMethod,
+        provider: nextDeliveryMethod === "gmail_ui" ? ("gmail" as const) : ("imap" as const),
+        deliveryMethod: nextDeliveryMethod,
         email: fromEmail,
         status: mailbox.imapHost ? ("connected" as const) : ("disconnected" as const),
         host: String(mailbox.imapHost ?? "").trim(),
@@ -147,9 +166,11 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         gmailUiUserDataDir: String(existingConfig.mailbox.gmailUiUserDataDir ?? "").trim(),
         gmailUiProfileDirectory: String(existingConfig.mailbox.gmailUiProfileDirectory ?? "").trim(),
         gmailUiBrowserChannel: String(existingConfig.mailbox.gmailUiBrowserChannel ?? "chrome").trim() || "chrome",
-        gmailUiLoginState: loginStatus.gmailUiLoginState,
+        gmailUiLoginState: switchGmailUiToSmtp ? ("unknown" as const) : loginStatus.gmailUiLoginState,
         gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
-        gmailUiLoginMessage: providerError || loginStatus.gmailUiLoginMessage,
+        gmailUiLoginMessage: switchGmailUiToSmtp
+          ? "Mailpool SMTP credentials are available, so Google sign-in is not needed."
+          : providerError || loginStatus.gmailUiLoginMessage,
         proxyUrl: String(existingConfig.mailbox.proxyUrl ?? "").trim(),
         proxyHost: String(existingConfig.mailbox.proxyHost ?? "").trim(),
         proxyPort: Number(existingConfig.mailbox.proxyPort ?? 0) || 0,
@@ -349,20 +370,7 @@ export async function syncMailpoolOutreachAccountCredentials(accountId: string):
     return updated ?? account;
   }
 
-  const providerError = mailpoolMailboxErrorMessage(mailbox);
-  const disabled = shouldDisableMailpoolAccount(mailbox) || hasBlockingGmailUiLoginState(account.config);
-  const updated = await updateOutreachAccount(account.id, {
-    status: disabled ? ("inactive" as const) : ("active" as const),
-    config: {
-      mailpool: {
-        status: mailpoolMailboxResourceStatus(mailbox),
-      },
-      mailbox: {
-        ...(providerError ? { gmailUiLoginState: "error" as const, gmailUiLoginMessage: providerError } : {}),
-      },
-    },
-    credentials: buildMailpoolMailboxCredentials(mailbox),
-  });
+  const updated = await updateOutreachAccount(account.id, buildMailpoolAccountPatch(mailbox, account.config));
   return updated ?? account;
 }
 
@@ -371,7 +379,7 @@ function mailpoolAccountSyncPriority(account: OutreachAccount) {
   if (account.status === "active" && account.config.mailpool.status === "deleted") priority += 1000;
   if (account.config.mailpool.status !== "active") priority += 500;
   if (account.config.mailbox.status !== "connected") priority += 150;
-  if (account.config.mailbox.deliveryMethod === "gmail_ui" && account.config.mailbox.gmailUiLoginState === "error") {
+  if (hasBlockingGmailUiLoginState(account.config)) {
     priority += 50;
   }
   return priority;

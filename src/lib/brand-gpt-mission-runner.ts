@@ -16,6 +16,7 @@ import type {
   OperatorEvidenceCheck,
   OperatorEvidenceTraceEntry,
 } from "@/lib/operator-types";
+import { getWarmupOperatingGuide } from "@/lib/warmup-intelligence";
 
 type MissionRunnerMode = NonNullable<OperatorChatRequest["mode"]>;
 
@@ -267,9 +268,11 @@ function buildHeartbeatPrompt(input: {
     "You are not following a fixed campaign script. The goal is to create qualified B2B conversations safely. Decide the next action from live evidence, the tool catalog, prior attempts, cost/risk boundaries, and the mission objective.",
     "Do not stop at advice when an allowed tool can inspect, repair, test, launch, pause, retry, source, enrich, or route around the blocker.",
     "When an action fails, treat the failure as an observation. Try a materially different available path, inspect the cause, or record the missing platform capability with record_capability_gap.",
+    "When deliverability, warmup, or email setup is involved, classify the blocker as sender reputation, setup/route, campaign/readiness, list/prep, provider, or missing platform capability. Use warmup intelligence and delivery evidence before deciding.",
     "If the useful next move is to involve the user, use request_user_attention. You can use it whenever you decide user attention is valuable: blocker, setup request, strategy question, risk warning, or achievement update. Do not wait for a human prompt first.",
     `Runner mode: ${input.mode}. If a write, send, launch, domain purchase, or other risky action is needed while mode is recommendation_only, propose it precisely with evidence instead of pretending it happened.`,
     `Execution policy: ${input.executionPolicy}. If this is autonomous, the host may auto-approve allowed guarded tools and will still enforce tenant credentials, budgets, unsubscribe/compliance, provider limits, and audit logging.`,
+    `Email setup and warmup operating guide JSON: ${safeJson(getWarmupOperatingGuide(), 4500)}`,
     "Do not wait for generic instructions. Use your tools when live state is needed. Do not invent replies, lead counts, sender state, or deliverability status.",
     "Prefer a concise final answer that says: what changed, what you tried, what is blocked, and what you will try next if another tick runs.",
     `Mission JSON: ${safeJson({
@@ -311,6 +314,7 @@ function buildContinuationPrompt(input: {
     "Read the previous result as your observation. Decide the next useful action from live state: inspect deeper, fix the blocker, try a viable alternate route, launch a safe limited step, pause a risky route, or record a missing platform capability.",
     "If the most useful next step is user attention, call request_user_attention with a clear ask or update and keep the reason model-chosen.",
     "Do not repeat the same failed action unless the previous result gives new evidence that it can now work. Do not ask the user to choose from internal options when you can inspect the account state yourself.",
+    "For warmup/setup/deliverability, keep using the operating model from the heartbeat: classify the blocker before acting and prefer evidence over repeating the same move.",
     "Stop only when the remaining blocker is truly external, needs private human credentials, needs spend approval beyond policy, or no existing tool can do the needed job. If no existing tool can do it, call record_capability_gap instead of giving a generic status answer.",
     `Previous action JSON: ${safeJson({
       action: input.previousTurn.action,

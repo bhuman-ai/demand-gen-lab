@@ -1794,6 +1794,18 @@ async function ensureGmailUiDeliveryAccount(account: any) {
     throw new Error(`Mailpool sender ${fromEmail} is ${mailpoolStatus}, so Gmail UI login is blocked until Mailpool reports it active.`);
   }
 
+  const hasUsableSmtpRoute = Boolean(
+    deliveryMethod === "smtp" &&
+      String(account.config.mailbox.host ?? "").trim() &&
+      String(account.config.mailbox.smtpHost ?? "").trim() &&
+      String(account.config.mailbox.smtpUsername ?? "").trim() &&
+      String(account.config.mailbox.status ?? "").trim() === "connected" &&
+      (!mailpoolStatus || mailpoolStatus === "active")
+  );
+  if (isEligibleMailpoolGoogleSender && hasUsableSmtpRoute) {
+    return account;
+  }
+
   if (!isEligibleMailpoolGoogleSender && deliveryMethod !== "gmail_ui") {
     return account;
   }
@@ -1855,7 +1867,9 @@ async function getOrCreateSession(accountId: string, input: AdvanceInput) {
   const account = await ensureGmailUiDeliveryAccount(bundle.account);
 
   if (account.config.mailbox.deliveryMethod !== "gmail_ui") {
-    throw new Error(`Account ${account.id} is not configured for gmail_ui delivery.`);
+    throw new Error(
+      `Account ${account.id} is using ${account.config.mailbox.deliveryMethod} delivery, so the Gmail UI worker will not promote it automatically.`
+    );
   }
 
   const { userDataDir } = resolveGmailUiUserDataDir({

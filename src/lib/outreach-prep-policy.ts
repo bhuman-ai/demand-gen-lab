@@ -267,6 +267,8 @@ export function isDependencyMisconfiguredMessage(message: string) {
     normalized.includes("failed to update enrichanything prospect table") ||
     normalized.includes("failed to run enrichanything prospect table") ||
     normalized.includes("missing exa api key") ||
+    normalized.includes("exa request failed with status 402") ||
+    normalized.includes("payment required") ||
     normalized.includes("auth required") ||
     normalized.includes("unauthorized") ||
     normalized.includes("live table not found") ||

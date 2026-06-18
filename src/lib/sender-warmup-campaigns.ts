@@ -40,7 +40,11 @@ import {
   listOwnerRuns,
   setBrandOutreachAssignment,
 } from "@/lib/outreach-data";
-import { getOutreachAccountFromEmail, supportsAnyDelivery } from "@/lib/outreach-account-helpers";
+import {
+  getOutreachAccountFromEmail,
+  isOutreachGmailUiLoginReady,
+  supportsAnyDelivery,
+} from "@/lib/outreach-account-helpers";
 import { enrichBrandWithSenderHealth } from "@/lib/sender-health";
 import {
   buildSenderRoutingSignalFromDomainRow,
@@ -49,6 +53,9 @@ import {
 } from "@/lib/sender-routing";
 import { syncCanonicalSenderFromProvisionedAccount } from "@/lib/senders";
 import {
+  MAX_WARMUP_CAMPAIGN_DAILY_CAP,
+  laneHourlyCapForDailyCap,
+  laneMinSpacingMinutesForDailyCap,
   warmupCampaignDailyCapForDay,
   warmupCampaignHourlyCapForDay,
   warmupCampaignMinSpacingMinutesForDay,
@@ -134,12 +141,21 @@ function normalizeText(value: unknown) {
 }
 
 function isUsableWarmupSenderAccount(account: Awaited<ReturnType<typeof listOutreachAccounts>>[number] | null | undefined) {
+  const hasUsableReplyMailbox =
+    account?.config.mailbox.deliveryMethod === "gmail_ui"
+      ? isOutreachGmailUiLoginReady(account)
+      : account?.config.mailbox.status === "connected";
+  const customerIoProvisioningComplete =
+    account?.provider !== "customerio" ||
+    Boolean(account.config.customerIo.siteId.trim() && account.config.customerIo.workspaceId.trim());
   return Boolean(
     account &&
       account.status === "active" &&
       account.accountType !== "mailbox" &&
       account.config.mailpool.status !== "deleted" &&
       account.config.mailbox.status !== "disconnected" &&
+      hasUsableReplyMailbox &&
+      customerIoProvisioningComplete &&
       supportsAnyDelivery(account)
   );
 }
@@ -421,6 +437,14 @@ function buildWarmupCampaignName(senderLabel: string) {
   return `Warmup - ${senderLabel || "Sender"}`;
 }
 
+function safeWarmupCampaignDailyCap(currentValue: unknown) {
+  const current = Math.round(Number(currentValue));
+  if (Number.isFinite(current) && current > 0) {
+    return Math.min(current, MAX_WARMUP_CAMPAIGN_DAILY_CAP);
+  }
+  return warmupCampaignDailyCapForDay(1);
+}
+
 async function resolveWarmupIntentPack(
   brand: BrandRecord,
   existingCampaigns: ScaleCampaignRecord[]
@@ -501,26 +525,25 @@ function buildWarmupStartPromptTemplate(brand: BrandRecord, intentPack: WarmupIn
   const senderPerspective = inferWarmupSenderPerspective(brand);
   const toneHint = trimText(brand.tone, 80);
   return [
-    'Write warmup email copy for node "Warmup opener".',
-    "Primary goal: earn a real reply from a legitimate business contact.",
-    "This is inbox warmup, but the message must read like a normal business email between two real companies.",
+    'Write first-touch reply-acquisition email copy for node "Warmup opener".',
+    "Primary goal: earn a real reply from a legitimate business contact for a reason that would still make sense if a human sent it manually.",
+    "This is reply acquisition and inbox trust building, not a fake warmup loop. Do not mention warmup.",
     brandSummary ? `Sender brand reality: {{brandName}} = ${brandSummary}.` : "",
     `Write as ${senderPerspective} from {{brandName}}, not as a generic outbound operator or copywriter.`,
     toneHint ? `Match this sender tone when it fits: ${toneHint}.` : "",
     "Treat {{company}} as the recipient company and {{leadTitle}} as the best available short description of what that company actually does.",
-    "First anchor on what {{company}} appears to do, then ask one natural question that someone from {{brandName}} would honestly ask.",
-    "Make the reason for reaching out fit both sides. If {{company}} sells furniture, ask from a studio or office setup angle. If {{company}} sells software or services, ask about fit, workflow, process, pricing, or the right person.",
+    "First decide why a busy, self-interested person at {{company}} might answer. If there is no credible reason, write a simple vendor, support, pricing, partnership, availability, or right-person inquiry instead of pretending deep fit.",
+    "Make the reason for reaching out fit both sides and keep the intent honest. It is acceptable for the sender to ask as a buyer, operator, partner, user, or researcher only when the brand context supports that role.",
     keywordHint
       ? `You may borrow relevant brand vocabulary when it genuinely fits the situation: ${keywordHint}. Use it sparingly.`
       : "",
-    "Do not force deliverability, lead gen, outbound, prospecting, automation, market-note, or publishing language into the email unless it is genuinely relevant to both sides.",
-    "Do not sound like a synthetic warmup script, fake evaluation flow, or category-keyword exercise.",
+    "Do not force any category vocabulary into the email unless it is genuinely relevant to both sides.",
+    "Do not sound like a synthetic warmup script, fake evaluation flow, category-keyword exercise, or AI-written cold pitch.",
     "Only use research, publishing, advisor, or partner framing when that is genuinely part of {{brandName}} and it fits this specific company.",
     "Never invent a random use case that clashes with {{brandName}}'s actual work.",
     "Never invent statistics, customer stories, completed work, client questions, referrals, or proof points that are not in the provided context.",
     "If the fit is indirect, ask from an internal/admin/personal-work angle instead of pretending a customer or client asked.",
     "Subject rule: use the actual content of the email as a short inquiry phrase.",
-    "Good subject examples: studio furniture purchase inquiry, low-volume inbox warmup advice, founder cloud credits eligibility.",
     "Never write subjects like Quick question, Quick question for {{company}}, Question for {{company}}, or anything company-name-only.",
     "Never use the word question/questions in the subject. Use inquiry, advice, fit, setup, or the concrete topic instead.",
     "Keep it short and human. No hype, fake urgency, calendar link, or unresolved placeholders.",
@@ -849,6 +872,8 @@ async function ensureSingleSenderWarmupCampaign(input: {
         intentPack: warmupIntent,
       });
 
+      const safeDailyCap = safeWarmupCampaignDailyCap(campaign.scalePolicy.dailyCap);
+      const safeBusinessHours = 8;
       const nextCampaign =
         (await updateScaleCampaignRecord(input.brand.id, campaign.id, {
           name: campaignName,
@@ -861,6 +886,9 @@ async function ensureSingleSenderWarmupCampaign(input: {
           },
           scalePolicy: {
             ...campaign.scalePolicy,
+            dailyCap: safeDailyCap,
+            hourlyCap: laneHourlyCapForDailyCap(safeDailyCap, safeBusinessHours),
+            minSpacingMinutes: laneMinSpacingMinutesForDailyCap(safeDailyCap, safeBusinessHours),
             accountId: input.accountId,
             mailboxAccountId,
             lane: "warmup",
@@ -1038,10 +1066,17 @@ export async function reconcileAssignedSenderWarmupCampaigns(input: {
         healthyWarmupAccountIdSet.has(accountId)
       );
       const repairFallbackAccountIds = healthyWarmupAccountIds.slice(0, warmupAutoRepairLimit());
+      const usableExistingAssignedAccountIds = assignedAccountIds.filter((accountId) =>
+        isUsableWarmupSenderAccount(accountById.get(accountId))
+      );
+      const preferredAccountIds =
+        healthyAssignedAccountIds.length > 0
+          ? healthyAssignedAccountIds
+          : usableExistingAssignedAccountIds.length > 0
+            ? usableExistingAssignedAccountIds
+            : repairFallbackAccountIds;
       const usableAssignedAccountIds = dedupeWarmupSenderAccountIds(
-        (healthyAssignedAccountIds.length ? healthyAssignedAccountIds : repairFallbackAccountIds).filter((accountId) =>
-          isUsableWarmupSenderAccount(accountById.get(accountId))
-        ),
+        preferredAccountIds.filter((accountId) => isUsableWarmupSenderAccount(accountById.get(accountId))),
         accountById
       );
       const removedAccountIds = assignedAccountIds.filter((accountId) => !usableAssignedAccountIds.includes(accountId));

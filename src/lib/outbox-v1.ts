@@ -57,6 +57,7 @@ import {
 } from "@/lib/outreach-providers";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { generateJsonWithLlm } from "@/lib/llm-json";
+import { isOutboxManualTesterEmail } from "@/lib/outbox-access";
 
 export const OUTBOX_V1_EXTERNAL_REF_PREFIX = "outbox_v1:";
 export const OUTBOX_V1_SOURCE_PREFIX = "outbox-v1:";
@@ -276,6 +277,7 @@ export type OutboxConsoleState = {
 
 export type OutboxLaunchInput = {
   brandId: string;
+  operatorEmail?: string;
   senderAccountId?: string;
   batchName?: string;
   contactsText?: string;
@@ -438,6 +440,10 @@ function nowIso() {
 function outboundSendingEnabled() {
   const raw = String(process.env.OUTBOUND_SENDING_ENABLED ?? "").trim().toLowerCase();
   return ["1", "true", "yes", "on"].includes(raw);
+}
+
+function outboundSendingEnabledForOperator(operatorEmail?: string) {
+  return outboundSendingEnabled() || isOutboxManualTesterEmail(operatorEmail);
 }
 
 function cleanEnvValue(value: unknown) {
@@ -2353,6 +2359,7 @@ async function policyForSender(input: {
   account: OutreachAccount;
   requestedContacts?: number;
   requestedSendNow?: number;
+  operatorEmail?: string;
 }): Promise<OutboxPolicyDecision> {
   const [canonicalPool, stats, placement] = await Promise.all([
     getCanonicalSenderPoolForBrand(input.brandId).catch(() => null),
@@ -2372,7 +2379,7 @@ async function policyForSender(input: {
     senderState = "paused";
     reasons.push("sender_inactive");
   }
-  if (!outboundSendingEnabled()) {
+  if (!outboundSendingEnabledForOperator(input.operatorEmail)) {
     senderState = "paused";
     reasons.push("outbound_sending_disabled");
   }
@@ -2733,7 +2740,11 @@ export async function listOutboxBatches(brandId: string, limit = 25): Promise<Ou
   return Promise.all(outboxRuns.map((run) => summarizeOutboxRun({ run, campaigns })));
 }
 
-export async function getOutboxConsoleState(brandId: string, preferredSenderAccountId = ""): Promise<OutboxConsoleState> {
+export async function getOutboxConsoleState(
+  brandId: string,
+  preferredSenderAccountId = "",
+  options: { operatorEmail?: string } = {}
+): Promise<OutboxConsoleState> {
   const [batches, senders, queue] = await Promise.all([
     listOutboxBatches(brandId),
     senderOptionsForBrand(brandId),
@@ -2746,7 +2757,13 @@ export async function getOutboxConsoleState(brandId: string, preferredSenderAcco
   ) ?? senders.find((sender) => sender.ready) ?? null;
   const account = selectedSender ? await getOutreachAccount(selectedSender.accountId).catch(() => null) : null;
   const selectedPolicy = account
-    ? await policyForSender({ brandId, account, requestedContacts: 0, requestedSendNow: 0 })
+    ? await policyForSender({
+        brandId,
+        account,
+        requestedContacts: 0,
+        requestedSendNow: 0,
+        operatorEmail: options.operatorEmail,
+      })
     : null;
   return {
     batches,
@@ -2785,6 +2802,16 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     account,
     secrets: await getOutreachAccountSecrets(account.id),
   });
+  const preflightPolicy = await policyForSender({
+    brandId: input.brandId,
+    account,
+    requestedContacts: 1,
+    requestedSendNow: 1,
+    operatorEmail: input.operatorEmail,
+  });
+  if (preflightPolicy.availableNow <= 0) {
+    throw new Error(preflightPolicy.reasons[0] || "Outbox sending is not available for this operator.");
+  }
 
   const prepared =
     input.preparedContacts?.length
@@ -2852,6 +2879,7 @@ export async function launchOutboxBatch(input: OutboxLaunchInput): Promise<Outbo
     account,
     requestedContacts: accepted.length,
     requestedSendNow,
+    operatorEmail: input.operatorEmail,
   });
   const timezone = String(input.timezone ?? DEFAULT_TIMEZONE).trim() || DEFAULT_TIMEZONE;
   const dailyCap = Math.max(1, policy.dailyCap || DEFAULT_WARMING_DAILY_CAP);

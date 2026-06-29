@@ -1,4 +1,5 @@
 import { getBrandById } from "@/lib/factory-data";
+import { getOutboxManualTesterSession } from "@/lib/outbox-access";
 import { notFound } from "next/navigation";
 import OutboxClient from "./outbox-client";
 
@@ -9,6 +10,8 @@ export default async function OutboxPage({
   params: Promise<{ id: string }>;
   searchParams?: Promise<{ sender?: string }>;
 }) {
+  const session = await getOutboxManualTesterSession();
+  if (!session) notFound();
   const { id } = await params;
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const brand = await getBrandById(id, { includeEmbedded: true });

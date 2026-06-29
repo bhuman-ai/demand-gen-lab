@@ -3,6 +3,7 @@ import {
   getOutboxConsoleState,
   launchOutboxBatch,
 } from "@/lib/outbox-v1";
+import { getOutboxManualTesterSession, outboxAccessDeniedMessage } from "@/lib/outbox-access";
 
 export const maxDuration = 180;
 
@@ -29,9 +30,15 @@ function sourceMode(value: unknown) {
 export async function GET(request: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
   const url = new URL(request.url);
+  const session = await getOutboxManualTesterSession();
+  if (!session) {
+    return NextResponse.json({ error: outboxAccessDeniedMessage() }, { status: 403 });
+  }
   try {
     return NextResponse.json(
-      await getOutboxConsoleState(brandId, String(url.searchParams.get("sender") ?? "").trim())
+      await getOutboxConsoleState(brandId, String(url.searchParams.get("sender") ?? "").trim(), {
+        operatorEmail: session.email,
+      })
     );
   } catch (error) {
     return NextResponse.json(
@@ -43,10 +50,15 @@ export async function GET(request: Request, context: { params: Promise<{ brandId
 
 export async function POST(request: Request, context: { params: Promise<{ brandId: string }> }) {
   const { brandId } = await context.params;
+  const session = await getOutboxManualTesterSession();
+  if (!session) {
+    return NextResponse.json({ error: outboxAccessDeniedMessage() }, { status: 403 });
+  }
   const body = asRecord(await request.json().catch(() => ({})));
   try {
     const result = await launchOutboxBatch({
       brandId,
+      operatorEmail: session.email,
       senderAccountId: String(body.senderAccountId ?? "").trim(),
       batchName: String(body.batchName ?? "").trim(),
       contactsText: String(body.contactsText ?? "").trim(),

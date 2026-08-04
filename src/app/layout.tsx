@@ -27,6 +27,9 @@ export const metadata: Metadata = {
   },
   description: "One operating desk for outbound brands, experiments, senders, campaigns, and inboxes.",
   applicationName: "last b2b",
+  other: {
+    "clusterseo-verification": "clusterseo-4eba3dab552a433e914349d3",
+  },
   icons: {
     icon: "/icon.svg",
   },

@@ -5,11 +5,13 @@ import {
   buildYouTubeOAuthAuthorizeUrl,
   looksLikeGoogleOAuthClientId,
   resolveYouTubeOAuthClientCredentials,
+  YouTubeOAuthClientProfile,
 } from "@/lib/youtube";
 
 type YouTubeConnectState = {
   accountId: string;
   brandId: string;
+  oauthClientProfile?: YouTubeOAuthClientProfile;
   returnTo: string;
   issuedAt: number;
 };
@@ -18,6 +20,7 @@ type PrepareYouTubeConnectInput = {
   accountId: string;
   brandId?: string;
   loginHint?: string;
+  oauthClientProfile?: YouTubeOAuthClientProfile;
   returnTo?: string;
 };
 
@@ -60,8 +63,23 @@ function encodeState(input: YouTubeConnectState) {
   return `${payload}.${signature}`;
 }
 
-function callbackUrl() {
-  return `${getAppUrl()}/api/outreach/accounts/youtube/callback`;
+function cleanBaseUrl(value: string) {
+  const raw = value.trim();
+  if (!raw) return "";
+  return (raw.startsWith("http://") || raw.startsWith("https://") ? raw : `https://${raw}`).replace(/\/+$/, "");
+}
+
+function tapInOAuthRedirectBaseUrl() {
+  return cleanBaseUrl(
+    String(process.env.TAPINSOCIAL_YOUTUBE_OAUTH_REDIRECT_BASE_URL ?? "").trim() ||
+      String(process.env.TAPINSOCIAL_APP_URL ?? "").trim() ||
+      "https://www.tapinsocial.com"
+  );
+}
+
+export function youTubeOAuthCallbackUrl(profile: YouTubeOAuthClientProfile = "default") {
+  const baseUrl = profile === "tapinsocial" ? tapInOAuthRedirectBaseUrl() : getAppUrl();
+  return `${baseUrl}/api/outreach/accounts/youtube/callback`;
 }
 
 function configuredReturnOrigins() {
@@ -112,6 +130,7 @@ export function normalizeYouTubeConnectReturnTo(value: unknown) {
 export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput) {
   const accountId = String(input.accountId ?? "").trim();
   const brandId = String(input.brandId ?? "").trim();
+  const oauthClientProfile = input.oauthClientProfile === "tapinsocial" ? "tapinsocial" : "default";
   if (!accountId) {
     throw new YouTubeConnectError("account not found", { status: 404 });
   }
@@ -122,7 +141,9 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
   }
 
   const secrets = await getOutreachAccountSecrets(accountId);
-  const credentials = resolveYouTubeOAuthClientCredentials(secrets ?? undefined);
+  const credentials = resolveYouTubeOAuthClientCredentials(secrets ?? undefined, {
+    profile: oauthClientProfile,
+  });
   const invalidClientId = Boolean(credentials.clientId) && !looksLikeGoogleOAuthClientId(credentials.clientId);
   const missingFields = [
     !credentials.clientId || invalidClientId ? "youtubeClientId" : "",
@@ -132,7 +153,9 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
     throw new YouTubeConnectError(
       invalidClientId
         ? "The saved Google app credentials are invalid. Enter the OAuth client ID and client secret from Google Cloud Console."
-        : "We need a Google client ID and client secret before YouTube can open.",
+        : oauthClientProfile === "tapinsocial"
+          ? "Set TAPINSOCIAL_YOUTUBE_OAUTH_CLIENT_ID and TAPINSOCIAL_YOUTUBE_OAUTH_CLIENT_SECRET before TapIn can open YouTube sign-in."
+          : "We need a Google client ID and client secret before YouTube can open.",
       {
         status: 409,
         errorCode: "youtube_oauth_credentials_missing",
@@ -148,14 +171,16 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
   const state = encodeState({
     accountId,
     brandId,
+    oauthClientProfile,
     returnTo: normalizeYouTubeConnectReturnTo(input.returnTo),
     issuedAt: Date.now(),
   });
 
   return buildYouTubeOAuthAuthorizeUrl({
     clientId: credentials.clientId,
-    redirectUri: callbackUrl(),
+    redirectUri: youTubeOAuthCallbackUrl(oauthClientProfile),
     state,
     loginHint,
+    includeGrantedScopes: oauthClientProfile !== "tapinsocial",
   });
 }

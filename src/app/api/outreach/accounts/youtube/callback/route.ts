@@ -2,17 +2,19 @@ import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { getOutreachAccount, getOutreachAccountSecrets, updateOutreachAccount } from "@/lib/outreach-data";
 import { getAppUrl } from "@/lib/app-url";
-import { normalizeYouTubeConnectReturnTo } from "@/lib/youtube-connect";
+import { normalizeYouTubeConnectReturnTo, youTubeOAuthCallbackUrl } from "@/lib/youtube-connect";
 import {
   exchangeYouTubeOAuthCode,
   getAuthenticatedYouTubeChannelProfile,
   resolveYouTubeOAuthClientCredentials,
+  YouTubeOAuthClientProfile,
   YouTubeApiError,
 } from "@/lib/youtube";
 
 type YouTubeConnectState = {
   accountId: string;
   brandId: string;
+  oauthClientProfile?: YouTubeOAuthClientProfile;
   returnTo: string;
   issuedAt: number;
 };
@@ -58,12 +60,15 @@ function decodeState(value: string): YouTubeConnectState | null {
     const row = decoded as Record<string, unknown>;
     const accountId = String(row.accountId ?? "").trim();
     const brandId = String(row.brandId ?? "").trim();
+    const oauthClientProfile =
+      row.oauthClientProfile === "tapinsocial" ? "tapinsocial" : "default";
     const issuedAt = Number(row.issuedAt ?? 0);
     if (!accountId || !Number.isFinite(issuedAt)) return null;
     if (Date.now() - issuedAt > STATE_MAX_AGE_MS) return null;
     return {
       accountId,
       brandId,
+      oauthClientProfile,
       returnTo: normalizeYouTubeConnectReturnTo(row.returnTo),
       issuedAt,
     };
@@ -90,10 +95,6 @@ function redirectUrl(input: {
     url.searchParams.set("youtubeMessage", String(input.message ?? "").trim());
   }
   return url.toString();
-}
-
-function callbackUrl() {
-  return `${getAppUrl()}/api/outreach/accounts/youtube/callback`;
 }
 
 function normalizeYouTubeHandle(value: string) {
@@ -165,7 +166,9 @@ export async function GET(request: Request) {
     }
 
     const existingSecrets = await getOutreachAccountSecrets(state.accountId);
-    const credentials = resolveYouTubeOAuthClientCredentials(existingSecrets ?? undefined);
+    const credentials = resolveYouTubeOAuthClientCredentials(existingSecrets ?? undefined, {
+      profile: state.oauthClientProfile,
+    });
     if (!credentials.clientId || !credentials.clientSecret) {
       return failure("YouTube connect is missing app OAuth credentials.");
     }
@@ -174,7 +177,7 @@ export async function GET(request: Request) {
       code,
       clientId: credentials.clientId,
       clientSecret: credentials.clientSecret,
-      redirectUri: callbackUrl(),
+      redirectUri: youTubeOAuthCallbackUrl(state.oauthClientProfile),
     });
     console.info(
       "[youtube-callback] code exchange complete",

@@ -35,6 +35,7 @@ export async function POST(request: Request) {
       accountId: String(body.accountId ?? body.account_id ?? "").trim(),
       brandId: String(body.brandId ?? body.brand_id ?? "").trim(),
       loginHint: String(body.loginHint ?? body.login_hint ?? "").trim(),
+      oauthClientProfile: "tapinsocial",
       returnTo: String(body.returnTo ?? body.return_to ?? "").trim(),
     });
 

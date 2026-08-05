@@ -2056,6 +2056,10 @@ export function buildSocialCommentPlanningPrompt(input: {
   const forceDraft = Boolean(input.force);
   const brandName = commentBrandName(input.brand.name);
   const brandCommentPrompt = resolveSocialDiscoveryCommentPrompt(input.brand.socialDiscoveryCommentPrompt).slice(0, 4000);
+  const contextualMentionRule =
+    plan.mentionPolicy === "possible_soft_mention"
+      ? `Mention ${brandName} at most once only if it directly improves this answer. A useful no-mention comment is valid.`
+      : `Do not mention ${brandName} for this opportunity because heuristic_mention_policy is ${plan.mentionPolicy}.`;
   return [
     `You are writing one ${platformLabel} comment for a real brand account to post.`,
     draftMode === "thread"
@@ -2082,7 +2086,7 @@ export function buildSocialCommentPlanningPrompt(input: {
           "- Do not sound like a marketer, strategist, founder, consultant, or brand writer.",
           "- Do not sound like you are trying to teach the audience or summarize the whole video.",
           "- A little roughness is okay. The comment should feel like it was typed in under 20 seconds.",
-          "- Mention the brand exactly once. Keep it incidental and ordinary. No 'from our work', no 'we see that at BRAND', no 'we learned that at BRAND', no polished side note.",
+          `- ${forceDraft ? `Mention ${brandName} exactly once and keep it incidental and ordinary.` : contextualMentionRule}`,
           "- Do not append a separate brand sentence. Do not turn the comment into a pitch.",
           "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
         ].join("\n")
@@ -2092,7 +2096,9 @@ export function buildSocialCommentPlanningPrompt(input: {
       : "Leave replyDraft empty.",
     "Set shouldComment to true only when the exact video is a natural, brand-relevant surface for a real comment.",
     "If the video is weakly related, off-topic, language-mismatched, too sensitive, or only matches the search query accidentally, set shouldComment to false and leave commentDraft and replyDraft empty.",
-    "Brand mention rules when shouldComment is true: exactly once, incidental, not promotional. No polished bridge sentence, no full product framing, no feature list, no value-prop stack, no 'fits this shift', no 'exists for this', and no 'without going fully manual'.",
+    forceDraft
+      ? "Brand mention rules when shouldComment is true: exactly once, incidental, not promotional. No polished bridge sentence, no full product framing, no feature list, or value-prop stack."
+      : contextualMentionRule,
     draftMode === "thread"
       ? "Thread rules: commentDraft should work as a normal standalone YouTube comment. replyDraft should read like a real second person responding to that comment, not a coordinated ad. Do not make the first comment obviously tee up the brand."
       : "Solo rules: commentDraft must work alone. No setup for another account.",

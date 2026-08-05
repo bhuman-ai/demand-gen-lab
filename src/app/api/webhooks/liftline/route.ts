@@ -35,15 +35,25 @@ function contextualCommentPrompt(input: {
   positioning: string;
   voice: string;
   voiceSample: string;
+  openingCommentPrompt: string;
+  delayedReplyPrompt: string;
   maximumSharePercent: number;
 }) {
   return [
-    "Write one short, platform-native comment that is genuinely useful to the exact conversation.",
-    "The answer must work even if the brand name is removed.",
+    "Write a short, platform-native comment flow that is genuinely useful to the exact conversation.",
+    "The opening comment must work on its own even if no reply is posted.",
     "Brand name: " + input.brandName,
     "Brand positioning: " + input.positioning,
     "Voice preset: " + input.voice,
     "Voice example: " + input.voiceSample,
+    "Opening comment instructions:",
+    input.openingCommentPrompt,
+    "Delayed reply instructions:",
+    input.delayedReplyPrompt,
+    "Runtime context:",
+    "- TapIn supplies the matched YouTube video title and description to the generator automatically.",
+    "- Opening comment instructions apply only to commentDraft.",
+    "- Delayed reply instructions apply only to replyDraft.",
     "Contextual mention policy:",
     "- Mention the exact brand only when heuristic_mention_policy is possible_soft_mention and the brand directly helps the answer.",
     "- Keep brand mentions at or below " + input.maximumSharePercent + "% of qualified comments across the campaign.",
@@ -51,6 +61,7 @@ function contextualCommentPrompt(input: {
     "- Never add a link unless the person explicitly asks for one.",
     "- Never call the comment a backlink or promise search-ranking impact.",
     "- Never fake personal experience, customer status, or product results.",
+    "- Disclose affiliation whenever the wording could otherwise imply an independent recommendation.",
     "- When the brand appears, mention it exactly once and keep it incidental.",
   ].join("\n");
 }
@@ -67,6 +78,7 @@ export async function POST(request: Request) {
   const backend = asRecord(body.backend);
   const tenant = asRecord(setup.tenant);
   const commentVoice = asRecord(autopilot.commentVoice);
+  const prompts = asRecord(autopilot.prompts);
   const brandMention = asRecord(autopilot.brandMention);
   const account = asRecord(setup.account);
   const connections = asRecord(account.connections);
@@ -102,6 +114,14 @@ export async function POST(request: Request) {
       positioning,
       voice: String(commentVoice.preset ?? setup.voice ?? "Warm").trim(),
       voiceSample: String(commentVoice.sample ?? setup.voiceSample ?? "").trim(),
+      openingCommentPrompt: String(
+        prompts.openingComment ?? setup.commentPrompt ??
+          "Write a short, natural comment that reacts to one specific point in the video."
+      ).trim(),
+      delayedReplyPrompt: String(
+        prompts.delayedReply ?? setup.replyPrompt ??
+          "Reply directly to the opening comment with a concise, helpful answer."
+      ).trim(),
       maximumSharePercent,
     }),
     socialDiscoveryPlatforms: platforms.length ? platforms : ["youtube"],

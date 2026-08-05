@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prepareYouTubeConnectUrl, YouTubeConnectError } from "@/lib/youtube-connect";
+import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -31,9 +32,19 @@ export async function POST(request: Request) {
 
   try {
     const body = asRecord(await request.json().catch(() => ({})));
+    const userId = String(body.userId ?? body.user_id ?? "").trim();
+    const accountId = String(body.accountId ?? body.account_id ?? "").trim();
+    const brandId = String(body.brandId ?? body.brand_id ?? "").trim();
+    const workspace = await getTapInWorkspaceForUser(userId);
+    if (!workspace || workspace.brandId !== brandId || workspace.youtubeAccountId !== accountId) {
+      return NextResponse.json(
+        { error: "TapIn workspace ownership could not be verified." },
+        { status: 403 }
+      );
+    }
     const url = await prepareYouTubeConnectUrl({
-      accountId: String(body.accountId ?? body.account_id ?? "").trim(),
-      brandId: String(body.brandId ?? body.brand_id ?? "").trim(),
+      accountId,
+      brandId,
       loginHint: String(body.loginHint ?? body.login_hint ?? "").trim(),
       oauthClientProfile: "tapinsocial",
       returnTo: String(body.returnTo ?? body.return_to ?? "").trim(),

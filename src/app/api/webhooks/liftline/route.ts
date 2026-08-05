@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBrandById, updateBrand } from "@/lib/factory-data";
+import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -84,9 +85,21 @@ export async function POST(request: Request) {
   const connections = asRecord(account.connections);
   const brandId = String(backend.brandId ?? "").trim();
   const setupId = String(setup.setupId ?? "").trim();
+  const authUserId = String(tenant.userId ?? "").trim();
 
-  if (!brandId) {
-    return NextResponse.json({ ok: false, message: "Backend brand is required." }, { status: 400 });
+  if (!brandId || !authUserId) {
+    return NextResponse.json(
+      { ok: false, message: "Authenticated TapIn workspace is required." },
+      { status: 400 }
+    );
+  }
+
+  const workspace = await getTapInWorkspaceForUser(authUserId);
+  if (!workspace || workspace.brandId !== brandId || String(tenant.brandId ?? "").trim() !== brandId) {
+    return NextResponse.json(
+      { ok: false, message: "TapIn workspace ownership could not be verified." },
+      { status: 403 }
+    );
   }
 
   const brand = await getBrandById(brandId);

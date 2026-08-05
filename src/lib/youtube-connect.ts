@@ -11,6 +11,7 @@ import {
 type YouTubeConnectState = {
   accountId: string;
   brandId: string;
+  tapInUserId?: string;
   oauthClientProfile?: YouTubeOAuthClientProfile;
   returnTo: string;
   issuedAt: number;
@@ -19,6 +20,7 @@ type YouTubeConnectState = {
 type PrepareYouTubeConnectInput = {
   accountId: string;
   brandId?: string;
+  tapInUserId?: string;
   loginHint?: string;
   oauthClientProfile?: YouTubeOAuthClientProfile;
   returnTo?: string;
@@ -170,6 +172,7 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
   const state = encodeState({
     accountId,
     brandId,
+    tapInUserId: String(input.tapInUserId ?? "").trim() || undefined,
     oauthClientProfile,
     returnTo: normalizeYouTubeConnectReturnTo(input.returnTo),
     issuedAt: Date.now(),
@@ -181,5 +184,6 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
     state,
     loginHint,
     includeGrantedScopes: oauthClientProfile !== "tapinsocial",
+    forceAccountSelection: oauthClientProfile === "tapinsocial",
   });
 }

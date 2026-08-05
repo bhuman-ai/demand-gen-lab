@@ -5,7 +5,7 @@ import {
   isPlatformDeliveryError,
   SocialCommentDeliveryError,
 } from "@/lib/social-discovery-comment-delivery";
-import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
+import { getTapInWorkspaceForUser, workspaceOwnsYouTubeAccount } from "@/lib/tapinsocial-auth";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
   const text = String(body.text ?? "").trim();
   const workspace = await getTapInWorkspaceForUser(userId);
 
-  if (!workspace || workspace.brandId !== brandId || workspace.youtubeAccountId !== accountId) {
+  if (!workspace || workspace.brandId !== brandId || !workspaceOwnsYouTubeAccount(workspace, accountId)) {
     return NextResponse.json(
       { error: "TapIn workspace ownership could not be verified." },
       { status: 403 }

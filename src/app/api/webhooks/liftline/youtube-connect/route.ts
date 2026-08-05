@@ -8,17 +8,34 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
-export async function POST(
-  request: Request,
-  context: { params: Promise<{ accountId: string }> }
-) {
+function expectedSecret() {
+  return (
+    String(process.env.LIFTLINE_AUTOPILOT_WEBHOOK_SECRET ?? "").trim() ||
+    String(process.env.LIFTLINE_WEBHOOK_SECRET ?? "").trim()
+  );
+}
+
+function suppliedSecret(request: Request) {
+  const authorization = request.headers.get("authorization") ?? "";
+  return (
+    String(request.headers.get("x-liftline-secret") ?? "").trim() ||
+    authorization.replace(/^Bearer\s+/i, "").trim()
+  );
+}
+
+export async function POST(request: Request) {
+  const expected = expectedSecret();
+  if (!expected || suppliedSecret(request) !== expected) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
+
   try {
-    const { accountId } = await context.params;
     const body = asRecord(await request.json().catch(() => ({})));
     const url = await prepareYouTubeConnectUrl({
-      accountId,
+      accountId: String(body.accountId ?? body.account_id ?? "").trim(),
       brandId: String(body.brandId ?? body.brand_id ?? "").trim(),
       loginHint: String(body.loginHint ?? body.login_hint ?? "").trim(),
+      oauthClientProfile: "tapinsocial",
       returnTo: String(body.returnTo ?? body.return_to ?? "").trim(),
     });
 

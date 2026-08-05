@@ -12,6 +12,8 @@ const YOUTUBE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const YOUTUBE_WEBSUB_HUB_URL = "https://pubsubhubbub.appspot.com/subscribe";
 const YOUTUBE_COMMENT_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
 
+export type YouTubeOAuthClientProfile = "default" | "tapinsocial";
+
 type YouTubeRequestOptions = {
   path: string;
   method?: "GET" | "POST";
@@ -152,7 +154,25 @@ function youtubeRefreshToken(secrets: Pick<OutreachAccountSecrets, "youtubeRefre
   return String(secrets.youtubeRefreshToken ?? "").trim();
 }
 
-function youtubeEnvClientId() {
+function tapInYouTubeEnvClientId() {
+  return (
+    String(process.env.TAPINSOCIAL_YOUTUBE_OAUTH_CLIENT_ID ?? "").trim() ||
+    String(process.env.TAPIN_YOUTUBE_OAUTH_CLIENT_ID ?? "").trim() ||
+    String(process.env.LIFTLINE_YOUTUBE_OAUTH_CLIENT_ID ?? "").trim()
+  );
+}
+
+function tapInYouTubeEnvClientSecret() {
+  return (
+    String(process.env.TAPINSOCIAL_YOUTUBE_OAUTH_CLIENT_SECRET ?? "").trim() ||
+    String(process.env.TAPIN_YOUTUBE_OAUTH_CLIENT_SECRET ?? "").trim() ||
+    String(process.env.LIFTLINE_YOUTUBE_OAUTH_CLIENT_SECRET ?? "").trim()
+  );
+}
+
+function youtubeEnvClientId(profile: YouTubeOAuthClientProfile = "default") {
+  if (profile === "tapinsocial") return tapInYouTubeEnvClientId();
+
   return (
     String(process.env.YOUTUBE_OAUTH_CLIENT_ID ?? "").trim() ||
     String(process.env.GOOGLE_OAUTH_CLIENT_ID ?? "").trim() ||
@@ -160,7 +180,9 @@ function youtubeEnvClientId() {
   );
 }
 
-function youtubeEnvClientSecret() {
+function youtubeEnvClientSecret(profile: YouTubeOAuthClientProfile = "default") {
+  if (profile === "tapinsocial") return tapInYouTubeEnvClientSecret();
+
   return (
     String(process.env.YOUTUBE_OAUTH_CLIENT_SECRET ?? "").trim() ||
     String(process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "").trim() ||
@@ -208,10 +230,18 @@ export function hasYouTubeDataApiKey() {
 }
 
 export function resolveYouTubeOAuthClientCredentials(
-  secrets?: Partial<Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret">>
+  secrets?: Partial<Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret">>,
+  options?: { profile?: YouTubeOAuthClientProfile }
 ) {
-  const clientId = String(secrets?.youtubeClientId ?? "").trim() || youtubeEnvClientId();
-  const clientSecret = String(secrets?.youtubeClientSecret ?? "").trim() || youtubeEnvClientSecret();
+  const profile = options?.profile ?? "default";
+  const clientId =
+    profile === "tapinsocial"
+      ? youtubeEnvClientId(profile)
+      : String(secrets?.youtubeClientId ?? "").trim() || youtubeEnvClientId(profile);
+  const clientSecret =
+    profile === "tapinsocial"
+      ? youtubeEnvClientSecret(profile)
+      : String(secrets?.youtubeClientSecret ?? "").trim() || youtubeEnvClientSecret(profile);
   return {
     clientId,
     clientSecret,
@@ -228,6 +258,7 @@ export function buildYouTubeOAuthAuthorizeUrl(input: {
   redirectUri: string;
   state: string;
   loginHint?: string;
+  includeGrantedScopes?: boolean;
 }) {
   const clientId = String(input.clientId ?? "").trim();
   const redirectUri = String(input.redirectUri ?? "").trim();
@@ -243,7 +274,9 @@ export function buildYouTubeOAuthAuthorizeUrl(input: {
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", YOUTUBE_COMMENT_SCOPE);
   url.searchParams.set("access_type", "offline");
-  url.searchParams.set("include_granted_scopes", "true");
+  if (input.includeGrantedScopes !== false) {
+    url.searchParams.set("include_granted_scopes", "true");
+  }
   url.searchParams.set("prompt", "consent");
   url.searchParams.set("state", state);
   if (String(input.loginHint ?? "").trim()) {

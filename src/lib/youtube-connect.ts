@@ -166,8 +166,7 @@ export async function prepareYouTubeConnectUrl(input: PrepareYouTubeConnectInput
 
   const loginHint =
     String(input.loginHint ?? "").trim() ||
-    account.config.mailbox.email.trim() ||
-    "";
+    (oauthClientProfile === "tapinsocial" ? "" : account.config.mailbox.email.trim());
   const state = encodeState({
     accountId,
     brandId,

@@ -577,7 +577,7 @@ export async function getAuthenticatedYouTubeChannelProfile(input: {
     "";
   const channelId = textValue(item.id);
   if (!channelId) {
-    throw new YouTubeApiError("YouTube OAuth completed, but no channel identity was returned.", {
+    throw new YouTubeApiError("Google connected, but that login has no YouTube channel. Choose the Google account that owns the channel you want to use, then reconnect.", {
       status: 422,
       details: payload,
     });

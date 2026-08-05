@@ -2065,7 +2065,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     draftMode === "thread"
       ? "You are designing a two-comment thread from two different real accounts."
       : "You are designing one standalone top-level comment only.",
-    "Use the following prompt for the top-level commentDraft:",
+    "Use the following campaign instructions for commentDraft and, in thread mode, replyDraft:",
     brandCommentPrompt,
     forceDraft
       ? `Selected-video mode: mention ${brandName} exactly once, casually, inside the real reaction to the video. ${brandName} must be present, but it should feel incidental, not promotional.`

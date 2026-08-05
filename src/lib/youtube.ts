@@ -259,6 +259,7 @@ export function buildYouTubeOAuthAuthorizeUrl(input: {
   state: string;
   loginHint?: string;
   includeGrantedScopes?: boolean;
+  forceAccountSelection?: boolean;
 }) {
   const clientId = String(input.clientId ?? "").trim();
   const redirectUri = String(input.redirectUri ?? "").trim();
@@ -277,7 +278,7 @@ export function buildYouTubeOAuthAuthorizeUrl(input: {
   if (input.includeGrantedScopes !== false) {
     url.searchParams.set("include_granted_scopes", "true");
   }
-  url.searchParams.set("prompt", "consent");
+  url.searchParams.set("prompt", input.forceAccountSelection ? "consent select_account" : "consent");
   url.searchParams.set("state", state);
   if (String(input.loginHint ?? "").trim()) {
     url.searchParams.set("login_hint", String(input.loginHint ?? "").trim());

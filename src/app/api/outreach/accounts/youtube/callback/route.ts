@@ -10,10 +10,15 @@ import {
   YouTubeOAuthClientProfile,
   YouTubeApiError,
 } from "@/lib/youtube";
+import {
+  attachTapInYouTubeAccount,
+  resolveTapInYouTubeAccountTarget,
+} from "@/lib/tapinsocial-auth";
 
 type YouTubeConnectState = {
   accountId: string;
   brandId: string;
+  tapInUserId?: string;
   oauthClientProfile?: YouTubeOAuthClientProfile;
   returnTo: string;
   issuedAt: number;
@@ -60,6 +65,7 @@ function decodeState(value: string): YouTubeConnectState | null {
     const row = decoded as Record<string, unknown>;
     const accountId = String(row.accountId ?? "").trim();
     const brandId = String(row.brandId ?? "").trim();
+    const tapInUserId = String(row.tapInUserId ?? "").trim();
     const oauthClientProfile =
       row.oauthClientProfile === "tapinsocial" ? "tapinsocial" : "default";
     const issuedAt = Number(row.issuedAt ?? 0);
@@ -68,6 +74,7 @@ function decodeState(value: string): YouTubeConnectState | null {
     return {
       accountId,
       brandId,
+      tapInUserId: tapInUserId || undefined,
       oauthClientProfile,
       returnTo: normalizeYouTubeConnectReturnTo(row.returnTo),
       issuedAt,
@@ -201,8 +208,17 @@ export async function GET(request: Request) {
         hasTitle: Boolean(String(channel.title ?? "").trim()),
       })
     );
+    const targetAccountId = state.tapInUserId
+      ? await resolveTapInYouTubeAccountTarget({
+          userId: state.tapInUserId,
+          brandId: state.brandId,
+          pendingAccountId: state.accountId,
+          channelId: channel.channelId,
+        })
+      : state.accountId;
+    const targetAccount = (await getOutreachAccount(targetAccountId)) ?? account;
     const now = new Date().toISOString();
-    const updated = await updateOutreachAccount(state.accountId, {
+    const updated = await updateOutreachAccount(targetAccountId, {
       config: {
         social: {
           enabled: true,
@@ -212,12 +228,12 @@ export async function GET(request: Request) {
           handle: normalizeYouTubeHandle(channel.customUrl),
           profileUrl: `https://www.youtube.com/channel/${encodeURIComponent(channel.channelId)}`,
           publicIdentifier: channel.customUrl || channel.channelId,
-          displayName: channel.title || account.config.social.displayName,
-          bio: channel.description || account.config.social.bio,
-          avatarUrl: channel.avatarUrl || account.config.social.avatarUrl,
+          displayName: channel.title || targetAccount.config.social.displayName,
+          bio: channel.description || targetAccount.config.social.bio,
+          avatarUrl: channel.avatarUrl || targetAccount.config.social.avatarUrl,
           linkedAt: now,
           lastProfileSyncAt: now,
-          platforms: Array.from(new Set([...(account.config.social.platforms ?? []), "youtube"])),
+          platforms: Array.from(new Set([...(targetAccount.config.social.platforms ?? []), "youtube"])),
         },
       },
       credentials: {
@@ -227,12 +243,12 @@ export async function GET(request: Request) {
       },
     });
     if (!hasSavedYouTubeIdentity(updated, channel.channelId)) {
-      const reloaded = await getOutreachAccount(state.accountId);
+      const reloaded = await getOutreachAccount(targetAccountId);
       if (!hasSavedYouTubeIdentity(reloaded, channel.channelId)) {
         console.error(
           "[youtube-callback] persistence verification failed",
           JSON.stringify({
-            accountId: state.accountId,
+            accountId: targetAccountId,
             channelId: channel.channelId,
             updateReturnedAccount: Boolean(updated),
             reloadReturnedAccount: Boolean(reloaded),
@@ -244,15 +260,22 @@ export async function GET(request: Request) {
       console.warn(
         "[youtube-callback] update returned incomplete account but reload succeeded",
         JSON.stringify({
-          accountId: state.accountId,
+          accountId: targetAccountId,
           channelId: channel.channelId,
         })
       );
     }
+    if (state.tapInUserId) {
+      await attachTapInYouTubeAccount({
+        userId: state.tapInUserId,
+        brandId: state.brandId,
+        accountId: targetAccountId,
+      });
+    }
     console.info(
       "[youtube-callback] completed successfully",
       JSON.stringify({
-        accountId: state.accountId,
+        accountId: targetAccountId,
         channelId: channel.channelId,
       })
     );
@@ -260,7 +283,7 @@ export async function GET(request: Request) {
     return NextResponse.redirect(
       redirectUrl({
         brandId: state.brandId,
-        accountId: state.accountId,
+        accountId: targetAccountId,
         returnTo: state.returnTo,
         result: "success",
       })

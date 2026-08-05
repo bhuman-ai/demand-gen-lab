@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAuthClient } from "@/lib/auth-server";
 import {
+  getTapInWorkspaceForUser,
   provisionTapInWorkspace,
   tapInWorkspaceFromUser,
   type TapInAuthWorkspace,
@@ -50,7 +51,7 @@ async function workspaceForUser(
   body: Record<string, unknown>
 ): Promise<TapInAuthWorkspace> {
   const existing = tapInWorkspaceFromUser(user);
-  if (existing) return existing;
+  if (existing) return (await getTapInWorkspaceForUser(user.id)) ?? existing;
   return provisionTapInWorkspace({
     user,
     accountName: String(body.accountName ?? "").trim(),

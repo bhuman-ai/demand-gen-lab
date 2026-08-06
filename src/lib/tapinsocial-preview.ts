@@ -67,7 +67,13 @@ export async function generateTapInThreadPreview(
     },
     maxOutputTokens: 500,
     reasoningEffort: "low",
-    openAiOverrideModel: String(process.env.OPENAI_MODEL_TAPIN_PREVIEW ?? "").trim() || undefined,
+    providerOverride: "openrouter",
+    openRouterOverrideModel:
+      String(
+        process.env.OPENROUTER_MODEL_TAPIN_PREVIEW ??
+          process.env.OPENROUTER_MODEL_SOCIAL_COMMENT_PLANNING ??
+          ""
+      ).trim() || undefined,
   });
 
   const parsed = JSON.parse(result.text) as Record<string, unknown>;

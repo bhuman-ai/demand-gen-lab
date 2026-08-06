@@ -1,4 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": []
+  "crons": [
+    {
+      "path": "/api/internal/tapin/dispatch",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/internal/tapin/youtube-refill",
+      "schedule": "12 * * * *"
+    }
+  ]
 }

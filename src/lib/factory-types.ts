@@ -843,6 +843,12 @@ export type SocialActorRole =
   | "brand"
   | "community";
 
+export type TapInAccountAssignment = {
+  brandId: string;
+  role: "opening" | "reply";
+  updatedAt: string;
+};
+
 export type SocialAccountConfig = {
   enabled: boolean;
   connectionProvider: SocialConnectionProvider;
@@ -872,6 +878,7 @@ export type SocialAccountConfig = {
   recentActivity24h: number;
   recentActivity7d: number;
   coordinationGroup: string;
+  tapInAssignments: TapInAccountAssignment[];
   notes: string;
 };
 

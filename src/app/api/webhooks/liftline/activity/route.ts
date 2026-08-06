@@ -6,6 +6,7 @@ import {
 } from "@/lib/social-discovery-data";
 import { buildTapInActivitySnapshot } from "@/lib/tapinsocial-activity";
 import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
+import { getTapInRunnerBrandState } from "@/lib/tapinsocial-runner";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
   const now = new Date();
   const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
   try {
-    const [commentedPosts, pendingReplyPosts] = await Promise.all([
+    const [commentedPosts, pendingReplyPosts, runner] = await Promise.all([
       listSocialDiscoveryCommentedPostsSince({
         brandId,
         platform: "youtube",
@@ -66,14 +67,15 @@ export async function POST(request: Request) {
         limit: 1000,
       }),
       listSocialDiscoveryPostsWithPendingReplies({ brandIds: [brandId], limit: 500 }),
+      getTapInRunnerBrandState(brandId),
     ]);
     const activity = buildTapInActivitySnapshot({
-      enabled: brand.socialDiscoveryYouTubeAutoCommentEnabled,
+      enabled: brand.socialDiscoveryYouTubeAutoCommentEnabled && runner.live,
       commentedPosts,
       pendingReplyPosts,
       now,
     });
-    return NextResponse.json({ ok: true, activity });
+    return NextResponse.json({ ok: true, activity, runner });
   } catch {
     return NextResponse.json(
       { error: "TapIn activity is unavailable right now. Try again." },

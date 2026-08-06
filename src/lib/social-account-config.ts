@@ -42,6 +42,7 @@ export function defaultSocialAccountConfig(
     recentActivity24h: 0,
     recentActivity7d: 0,
     coordinationGroup: "",
+    tapInAssignments: [],
     notes: "",
     ...overrides,
   };
@@ -84,6 +85,7 @@ export function hasExplicitSocialIdentity(config: SocialAccountConfig) {
       config.personaSummary.trim() ||
       config.voiceSummary.trim() ||
       config.coordinationGroup.trim() ||
+      config.tapInAssignments.length ||
       config.notes.trim() ||
       config.platforms.length ||
       config.topicTags.length ||

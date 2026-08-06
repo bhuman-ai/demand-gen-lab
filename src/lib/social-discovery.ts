@@ -1024,6 +1024,37 @@ function shouldRejectPersonalSafetyContextMismatch(input: {
   return brandContextFitFor(input).isContextMismatch;
 }
 
+function discoveryWordStem(value: string) {
+  const word = value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (word.length < 5) return word;
+  for (const suffix of ["ization", "isation", "ized", "ised", "izing", "ising"] as const) {
+    if (word.endsWith(suffix) && word.length - suffix.length >= 4) {
+      return word.slice(0, -suffix.length);
+    }
+  }
+  if (word.endsWith("ies") && word.length > 5) return `${word.slice(0, -3)}y`;
+  if (word.endsWith("ing") && word.length > 6) return word.slice(0, -3);
+  if (word.endsWith("ed") && word.length > 5) return word.slice(0, -2);
+  if (word.endsWith("s") && word.length > 5) return word.slice(0, -1);
+  return word;
+}
+
+function discoveryTextMatchesTerm(text: string, term: string) {
+  const normalizedText = text.toLowerCase();
+  if (normalizedText.includes(term.toLowerCase())) return true;
+  const textStems = new Set(
+    normalizedText
+      .split(/[^a-z0-9]+/)
+      .map(discoveryWordStem)
+      .filter((word) => word.length >= 3)
+  );
+  const termStems = term
+    .split(/[^a-z0-9]+/i)
+    .map(discoveryWordStem)
+    .filter((word) => word.length >= 3);
+  return termStems.length > 0 && termStems.every((word) => textStems.has(word));
+}
+
 function matchedTermsFor(input: {
   text: string;
   brand: BrandRecord;
@@ -1045,8 +1076,7 @@ function matchedTermsFor(input: {
   const terms = uniqueStrings([...brandTerms, ...queryTerms, ...contextTerms])
     .filter((term) => term.length >= 3)
     .slice(0, 40);
-  const normalizedText = input.text.toLowerCase();
-  return terms.filter((term) => normalizedText.includes(term.toLowerCase()));
+  return terms.filter((term) => discoveryTextMatchesTerm(input.text, term));
 }
 
 function classifyIntent(input: {
@@ -1466,10 +1496,11 @@ function interactionTargetStrength(input: {
     return "skip";
   }
   if (input.surfaceType === "awareness_post") {
+    if (weighted >= 55 && input.relevanceScore >= 30) return "target";
     if (weighted >= 48 && input.relevanceScore >= 18) return "watch";
     return "skip";
   }
-  if (weighted >= 60) return "target";
+  if (weighted >= 55 && input.relevanceScore >= 30) return "target";
   if (weighted >= 46) return "watch";
   return "skip";
 }
@@ -2500,7 +2531,7 @@ function buildSocialDiscoverySearchPlanningPrompt(input: {
 }) {
   return [
     "You are planning saved YouTube searches for an automated comment discovery system.",
-    "The system runs these searches daily, finds recent YouTube videos from channels with over 1,000 subscribers, then drafts a short natural comment that can casually mention the brand.",
+    "The system runs these searches daily, finds recent YouTube videos from channels with at least 100 subscribers, then drafts a short natural comment that can casually mention the brand.",
     "The goal is to find videos where a real operator could leave an off-the-cuff useful comment, not an ad.",
     "",
     "Brainstorm search terms that are likely to surface relevant YouTube videos, creator discussions, demos, tutorials, agency advice, pain-point videos, comparisons, and workflow breakdowns.",

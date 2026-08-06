@@ -31,6 +31,7 @@ import type {
   SocialDiscoveryRun,
   SocialDiscoveryStatus,
 } from "@/lib/social-discovery-types";
+import { meetsYouTubeSubscriberMinimum } from "@/lib/social-discovery-youtube-eligibility";
 
 type InteractionPlan = SocialDiscoveryPost["interactionPlan"] & {
   domainProfile?: string;
@@ -91,8 +92,6 @@ type DiscoveryResponse = {
   };
 };
 
-const MIN_YOUTUBE_DRAFT_SUBSCRIBERS = 1000;
-
 type SocialDiscoveryWorkspace = "queue" | "searches" | "channels" | "accounts" | "manual";
 type QueueViewFilter = "all" | "ready" | "drafting" | "attention" | "posted";
 type QueuePostState = "ready" | "drafting" | "attention" | "posted";
@@ -121,7 +120,7 @@ function youtubeRawNumber(post: DiscoveryPost | null, key: string) {
 
 function isEligibleYouTubeDraftPost(post: DiscoveryPost) {
   if (post.platform !== "youtube") return true;
-  return youtubeRawNumber(post, "subscriberCount") > MIN_YOUTUBE_DRAFT_SUBSCRIBERS;
+  return meetsYouTubeSubscriberMinimum(youtubeRawNumber(post, "subscriberCount"));
 }
 
 function filterDraftEligiblePosts(posts: DiscoveryPost[]) {

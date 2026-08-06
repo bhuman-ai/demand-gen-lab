@@ -1,4 +1,5 @@
 import { getOutreachAccountSecrets, listSocialRoutingAccounts } from "@/lib/outreach-data";
+import { socialDiscoveryCampaignBrand } from "@/lib/social-discovery-campaign-context";
 import {
   listSocialDiscoveryAutoCommentCandidates,
   listSocialDiscoveryCommentedPostsSince,
@@ -22,6 +23,7 @@ import {
 } from "@/lib/social-discovery-search-strategy";
 import type { OutreachAccount } from "@/lib/factory-types";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
+import { meetsYouTubeSubscriberMinimum } from "@/lib/social-discovery-youtube-eligibility";
 import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
 
 type AutoCommentDispatchOptions = {
@@ -64,8 +66,6 @@ type AutoCommentDispatchResult = {
     details: Array<Record<string, unknown>>;
   }>;
 };
-
-const MIN_YOUTUBE_AUTO_COMMENT_SUBSCRIBERS = 1000;
 
 function boolEnv(name: string, fallback = false) {
   const raw = String(process.env[name] ?? "").trim().toLowerCase();
@@ -232,7 +232,9 @@ function candidateQualityProblem(
   const plan = post.interactionPlan;
   if (post.relevanceScore < input.minRelevanceScore) return "low_relevance";
   if (post.risingScore < input.minRisingScore) return "low_rising_score";
-  if (plan.targetStrength && plan.targetStrength !== "target") return "not_target";
+  if (plan.targetStrength && plan.targetStrength !== "target" && plan.targetStrength !== "watch") {
+    return "not_target";
+  }
   if (plan.commentPosture === "no_comment" || plan.commentPosture === "watch_only") return "not_commentable";
   return "";
 }
@@ -432,9 +434,10 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
   };
   for (const brand of brands) {
     if (result.posted >= perRunCap) break;
+    const campaignBrand = socialDiscoveryCampaignBrand(brand);
     const brandResult: AutoCommentDispatchResult["results"][number] = {
       brandId: brand.id,
-      brandName: brand.name,
+      brandName: campaignBrand.name,
       posted: 0,
       skipped: 0,
       failed: 0,
@@ -519,7 +522,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         brandResult.details.push({ postId: candidate.id, skipped: true, reason: retryReason });
         continue;
       }
-      if (youtubeSubscriberCount(candidate) <= MIN_YOUTUBE_AUTO_COMMENT_SUBSCRIBERS) {
+      if (!meetsYouTubeSubscriberMinimum(youtubeSubscriberCount(candidate))) {
         await markDispatchAttempt({ post: candidate, status: "skipped", reason: "subscriber_gate" });
         brandResult.skipped += 1;
         result.skipped += 1;
@@ -570,7 +573,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         const transcriptPost = await withTranscript(candidate);
         const mode = reply ? "thread" : "solo";
         const drafted = await refreshSocialDiscoveryCommentDraft({
-          brand,
+          brand: campaignBrand,
           post: transcriptPost,
           force: true,
           mode,
@@ -585,7 +588,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
           brandResult.details.push({ postId: postToSend.id, skipped: true, reason: draftedQualityProblem });
           continue;
         }
-        const brandName = commentBrandName(brand.name);
+        const brandName = commentBrandName(campaignBrand.name);
         const problem = draftProblem(postToSend, brandName, Boolean(reply));
         if (problem) {
           await markDispatchAttempt({ post: postToSend, status: "failed", reason: problem });
@@ -615,7 +618,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         }
 
         const delivery = await deliverSocialDiscoveryComment({
-          brand,
+          brand: campaignBrand,
           brandId: brand.id,
           postId: postToSend.id,
           text: pair.comment,

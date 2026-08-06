@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
+import { socialDiscoveryCampaignBrand } from "@/lib/social-discovery-campaign-context";
 import { enrichSocialPostsWithAccountRouting } from "@/lib/social-account-routing";
 import { getSocialDiscoveryPost, saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
 import { refreshSocialDiscoveryCommentDraft } from "@/lib/social-discovery";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
+import {
+  meetsYouTubeSubscriberMinimum,
+  youtubeSubscriberMinimumMessage,
+} from "@/lib/social-discovery-youtube-eligibility";
 import { getYouTubeVideoTranscript } from "@/lib/youtube";
-
-const MIN_YOUTUBE_DRAFT_SUBSCRIBERS = 1000;
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -146,16 +149,16 @@ export async function POST(request: Request, context: { params: Promise<{ brandI
     if (!post) {
       return NextResponse.json({ error: "post not found" }, { status: 404 });
     }
-    if (post.platform === "youtube" && youtubeSubscriberCount(post) <= MIN_YOUTUBE_DRAFT_SUBSCRIBERS) {
+    if (post.platform === "youtube" && !meetsYouTubeSubscriberMinimum(youtubeSubscriberCount(post))) {
       return NextResponse.json(
-        { error: "Channel needs over 1,000 subscribers before drafting." },
+        { error: youtubeSubscriberMinimumMessage() },
         { status: 400 }
       );
     }
 
     const postWithTranscript = await withYouTubeTranscript(post);
     const refreshedPost = await refreshSocialDiscoveryCommentDraft({
-      brand,
+      brand: socialDiscoveryCampaignBrand(brand),
       post: postWithTranscript,
       force: true,
       mode,

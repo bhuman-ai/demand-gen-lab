@@ -61,3 +61,15 @@ test("rejects a pool that can only reply to itself", () => {
   assert.equal(selected.reply, null);
   assert.equal(selected.reason, "assigned_accounts_unavailable");
 });
+
+test("comment-only campaigns choose one balanced account and no reply", () => {
+  const selected = selectBalancedAccountPair({
+    postId: "video-solo",
+    accounts,
+    roles: { campaignType: "comment", openingAccountIds: ["a", "b", "c"], replyAccountIds: [] },
+    recentAccountCounts: new Map([["a", 3], ["b", 0], ["c", 2]]),
+    perAccountHourlyCap: 5,
+  });
+  assert.equal(selected.primary?.id, "b");
+  assert.equal(selected.reply, null);
+});

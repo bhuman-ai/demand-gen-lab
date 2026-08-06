@@ -47,3 +47,30 @@ test("TapIn preview uses OpenRouter directly", async () => {
     else process.env.OPENAI_API_KEY = originalOpenAiKey;
   }
 });
+
+test("comment-only preview does not require or return a reply", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ choices: [{ message: { content: JSON.stringify({ openingComment: "This workflow gets the personalization balance right." }) } }] }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      campaignType: "comment",
+      brandName: "BHuman",
+      openingPrompt: "React naturally to the video.",
+      replyPrompt: "",
+      videoTitle: "Personalized outreach workflows",
+      videoDescription: "A practical walkthrough.",
+    });
+    assert.equal(preview.openingComment, "This workflow gets the personalization balance right.");
+    assert.equal(preview.reply, "");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});

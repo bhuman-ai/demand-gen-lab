@@ -1,6 +1,7 @@
 type RotationAccount = { id: string };
 
 export type AccountRotationRoles = {
+  campaignType?: "comment" | "thread";
   openingAccountIds: string[];
   replyAccountIds: string[];
 };
@@ -53,6 +54,15 @@ export function selectBalancedAccountPair<T extends RotationAccount>(input: {
 
   if (pinnedOpeningId || pinnedReplyId) {
     const primary = byId.get(pinnedOpeningId) ?? null;
+    if (input.roles.campaignType === "comment") {
+      if (!primary || !openingIds.has(primary.id)) {
+        return { primary: null, reply: null, reason: "assigned_accounts_unavailable" };
+      }
+      if ((input.recentAccountCounts.get(primary.id) ?? 0) >= input.perAccountHourlyCap) {
+        return { primary: null, reply: null, reason: "assigned_account_cap_reached" };
+      }
+      return { primary, reply: null, reason: "" };
+    }
     const reply = byId.get(pinnedReplyId) ?? null;
     if (
       !primary ||
@@ -80,6 +90,10 @@ export function selectBalancedAccountPair<T extends RotationAccount>(input: {
     seed: `${input.postId}:opening`,
   });
   if (!primary) return { primary: null, reply: null, reason: "assigned_account_cap_reached" };
+
+  if (input.roles.campaignType === "comment") {
+    return { primary, reply: null, reason: "" };
+  }
 
   const reply = chooseLeastUsed({
     accounts: input.accounts,

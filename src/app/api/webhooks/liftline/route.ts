@@ -158,6 +158,7 @@ export async function POST(request: Request) {
     }),
     socialDiscoveryPlatforms: platforms.length ? platforms : ["youtube"],
     socialDiscoveryQueries: targets,
+    socialDiscoverySearchStrategy: null,
     socialDiscoveryYouTubeAutoCommentEnabled:
       active && youtubeConnected && platforms.includes("youtube"),
   });

@@ -1,4 +1,5 @@
 import { getOutreachAccountSecrets, listSocialRoutingAccounts } from "@/lib/outreach-data";
+import { socialDiscoveryCampaignBrand } from "@/lib/social-discovery-campaign-context";
 import { createSocialDiscoveryRun, saveSocialDiscoveryPosts } from "@/lib/social-discovery-data";
 import {
   envFlag,
@@ -173,9 +174,10 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
   const results = [];
 
   for (const brand of brands) {
+    const campaignBrand = socialDiscoveryCampaignBrand(brand);
     const startedAt = new Date().toISOString();
     const strategyResult = await resolveYouTubeSearchStrategyForBrand({
-      brand,
+      brand: campaignBrand,
       maxQueries: strategyMaxQueries,
       persist: true,
     });
@@ -188,7 +190,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
     if (!queries.length) {
       results.push({
         brandId: brand.id,
-        brandName: brand.name,
+        brandName: campaignBrand.name,
         skipped: true,
         reason: "no_strategy_queries",
         savedSearches: 0,
@@ -205,7 +207,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
     }
 
     const discovery = await discoverYouTubeSearchPostsForBrand({
-      brand,
+      brand: campaignBrand,
       queries,
       maxResults: limitPerQuery,
       secrets: youtubeSearchCredentials?.secrets,
@@ -236,7 +238,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
 
     results.push({
       brandId: brand.id,
-      brandName: brand.name,
+      brandName: campaignBrand.name,
       runId: run.id,
       savedSearches: queries.length,
       generatedStrategy: strategyResult.generated,

@@ -36,7 +36,7 @@ test("campaign policy uses safe defaults and clamps unsafe values", () => {
   );
 });
 
-test("campaign policy survives the prompt fallback used before the database migration", () => {
+test("campaign policy survives durable backend prompt storage", () => {
   const policy = {
     minSubscriberCount: 750,
     maxVideoAgeHours: 48,

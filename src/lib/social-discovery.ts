@@ -787,7 +787,7 @@ function socialDiscoveryLookbackHours() {
 }
 
 function socialDiscoveryMaxPostAgeHours() {
-  const fallback = socialDiscoveryLookbackHours();
+  const fallback = 24;
   return Math.max(1, Math.min(168, Number(process.env.SOCIAL_DISCOVERY_MAX_POST_AGE_HOURS ?? fallback) || fallback));
 }
 

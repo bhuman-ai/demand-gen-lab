@@ -98,3 +98,39 @@ test("strong personalized-marketing content is target grade for the BHuman campa
   assert.notEqual(post.interactionPlan.commentPosture, "no_comment");
   assert.equal(isEligibleYouTubeDiscoveryPost(post), true);
 });
+
+test("YouTube scoring keeps relevant videos from the full default 24-hour discovery window", () => {
+  const now = new Date();
+  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1_000).toISOString();
+  const campaign = socialDiscoveryCampaignBrand(brand({
+    socialDiscoveryCommentPrompt: [
+      "Brand name: BHuman",
+      "Brand positioning: personalized video at scale for sales outreach and marketing",
+      "Runtime context:",
+      "- TapIn supplies the matched YouTube video title and description to the generator automatically.",
+    ].join("\n"),
+  }));
+  const post = buildScoredSocialDiscoveryPost({
+    id: "socialpost_two_hours_old",
+    brandId: campaign.id,
+    platform: "youtube",
+    provider: "youtube-data-api",
+    externalId: "video_two_hours_old",
+    url: "https://www.youtube.com/watch?v=video_two_hours_old",
+    title: "How to personalize sales outreach with video",
+    body: "A practical personalized marketing workflow for lead generation.",
+    author: "Sales channel",
+    community: "Sales channel",
+    query: "sales outreach",
+    engagementScore: 5_000,
+    providerRank: 1,
+    raw: {},
+    postedAt: twoHoursAgo,
+    discoveredAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    brand: campaign,
+  });
+
+  assert.ok(post);
+  assert.equal(isEligibleYouTubeDiscoveryPost(post), true);
+});

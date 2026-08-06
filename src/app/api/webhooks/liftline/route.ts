@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { getBrandById, updateBrand } from "@/lib/factory-data";
 import { getTapInWorkspaceForUser, saveTapInYouTubeRoles } from "@/lib/tapinsocial-auth";
+import {
+  DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
+  normalizeSocialDiscoveryYouTubePolicy,
+  youtubePolicyPromptLines,
+  type SocialDiscoveryYouTubePolicy,
+} from "@/lib/social-discovery-youtube-policy";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -39,6 +45,7 @@ function contextualCommentPrompt(input: {
   openingCommentPrompt: string;
   delayedReplyPrompt: string;
   maximumSharePercent: number;
+  youtubePolicy: SocialDiscoveryYouTubePolicy;
 }) {
   return [
     "Write a short, platform-native comment flow that is genuinely useful to the exact conversation.",
@@ -64,6 +71,7 @@ function contextualCommentPrompt(input: {
     "- Never fake personal experience, customer status, or product results.",
     "- Disclose affiliation whenever the wording could otherwise imply an independent recommendation.",
     "- When the brand appears, mention it exactly once and keep it incidental.",
+    ...youtubePolicyPromptLines(input.youtubePolicy),
   ].join("\n");
 }
 
@@ -81,6 +89,7 @@ export async function POST(request: Request) {
   const commentVoice = asRecord(autopilot.commentVoice);
   const prompts = asRecord(autopilot.prompts);
   const youtubeRoles = asRecord(autopilot.youtubeRoles);
+  const youtubeDiscovery = asRecord(autopilot.youtubeDiscovery ?? setup.youtubeDiscoveryPolicy);
   const brandMention = asRecord(autopilot.brandMention);
   const account = asRecord(setup.account);
   const connections = asRecord(account.connections);
@@ -121,6 +130,10 @@ export async function POST(request: Request) {
   );
   const active = setup.status !== "paused";
   const youtubeConnected = connections.youtube === true;
+  const youtubePolicy = normalizeSocialDiscoveryYouTubePolicy(
+    youtubeDiscovery,
+    DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
+  ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
 
   if (active && youtubeConnected && platforms.includes("youtube")) {
     try {
@@ -155,10 +168,12 @@ export async function POST(request: Request) {
           "Reply directly to the opening comment with a concise, helpful answer."
       ).trim(),
       maximumSharePercent,
+      youtubePolicy,
     }),
     socialDiscoveryPlatforms: platforms.length ? platforms : ["youtube"],
     socialDiscoveryQueries: targets,
     socialDiscoverySearchStrategy: null,
+    socialDiscoveryYouTubePolicy: youtubePolicy,
     socialDiscoveryYouTubeAutoCommentEnabled:
       active && youtubeConnected && platforms.includes("youtube"),
   });
@@ -185,6 +200,11 @@ export async function POST(request: Request) {
       {
         label: "Contextual mention policy",
         detail: "Useful first / mention at most " + maximumSharePercent + "% / skip when unnatural",
+        time: "Ready",
+      },
+      {
+        label: "Video rules",
+        detail: `${youtubePolicy.minSubscriberCount.toLocaleString()}+ subscribers / last ${youtubePolicy.maxVideoAgeHours} hours / ${youtubePolicy.relevanceMode} match`,
         time: "Ready",
       },
     ],

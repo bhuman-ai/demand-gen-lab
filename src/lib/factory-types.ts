@@ -616,6 +616,8 @@ export type SocialDiscoverySearchStrategy = {
   notes: string;
 };
 
+export type SocialDiscoveryYouTubePolicy = import("@/lib/social-discovery-youtube-policy").SocialDiscoveryYouTubePolicy;
+
 export type BrandRecord = {
   id: string;
   name: string;
@@ -629,6 +631,7 @@ export type BrandRecord = {
   socialDiscoveryYouTubeSubscriptions: SocialDiscoveryYouTubeSubscription[];
   socialDiscoveryYouTubeAutoCommentEnabled: boolean;
   socialDiscoverySearchStrategy: SocialDiscoverySearchStrategy | null;
+  socialDiscoveryYouTubePolicy?: SocialDiscoveryYouTubePolicy | null;
   operablePersonas: string[];
   availableAssets: string[];
   targetMarkets: string[];

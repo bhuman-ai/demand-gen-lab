@@ -16,3 +16,9 @@ test("YouTube subscriber minimum includes channels with exactly 100 subscribers"
   assert.equal(meetsYouTubeSubscriberMinimum(undefined), false);
   assert.match(youtubeSubscriberMinimumMessage(), /at least 100 subscribers/i);
 });
+
+test("YouTube subscriber minimum can be set per campaign", () => {
+  assert.equal(meetsYouTubeSubscriberMinimum(499, 500), false);
+  assert.equal(meetsYouTubeSubscriberMinimum(500, 500), true);
+  assert.equal(meetsYouTubeSubscriberMinimum(50, 0), true);
+});

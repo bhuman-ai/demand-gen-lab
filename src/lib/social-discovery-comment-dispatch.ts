@@ -24,6 +24,10 @@ import {
 import type { OutreachAccount } from "@/lib/factory-types";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import { meetsYouTubeSubscriberMinimum } from "@/lib/social-discovery-youtube-eligibility";
+import {
+  DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
+  normalizeSocialDiscoveryYouTubePolicy,
+} from "@/lib/social-discovery-youtube-policy";
 import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
 
 type AutoCommentDispatchOptions = {
@@ -63,6 +67,12 @@ type AutoCommentDispatchResult = {
     posted: number;
     skipped: number;
     failed: number;
+    policy: {
+      minSubscriberCount: number;
+      maxVideoAgeHours: number;
+      minRelevanceScore: number;
+      minRisingScore: number;
+    };
     details: Array<Record<string, unknown>>;
   }>;
 };
@@ -383,7 +393,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
     1,
     1440
   );
-  const maxVideoAgeHours = numberOption(
+  const fallbackMaxVideoAgeHours = numberOption(
     options.maxVideoAgeHours ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_MAX_VIDEO_AGE_HOURS,
     24,
     1,
@@ -395,13 +405,13 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
     1,
     500
   );
-  const minRelevanceScore = numberOption(
+  const fallbackMinRelevanceScore = numberOption(
     options.minRelevanceScore ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_MIN_RELEVANCE_SCORE,
     18,
     0,
     100
   );
-  const minRisingScore = numberOption(
+  const fallbackMinRisingScore = numberOption(
     options.minRisingScore ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_MIN_RISING_SCORE,
     30,
     0,
@@ -435,12 +445,35 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
   for (const brand of brands) {
     if (result.posted >= perRunCap) break;
     const campaignBrand = socialDiscoveryCampaignBrand(brand);
+    const campaignPolicy = normalizeSocialDiscoveryYouTubePolicy(brand.socialDiscoveryYouTubePolicy, {
+      ...DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
+      maxVideoAgeHours: fallbackMaxVideoAgeHours,
+      minRelevanceScore: fallbackMinRelevanceScore,
+      minRisingScore: fallbackMinRisingScore,
+    });
+    const maxVideoAgeHours = options.maxVideoAgeHours !== undefined
+      ? fallbackMaxVideoAgeHours
+      : campaignPolicy?.maxVideoAgeHours ?? fallbackMaxVideoAgeHours;
+    const minRelevanceScore = options.minRelevanceScore !== undefined
+      ? fallbackMinRelevanceScore
+      : campaignPolicy?.minRelevanceScore ?? fallbackMinRelevanceScore;
+    const minRisingScore = options.minRisingScore !== undefined
+      ? fallbackMinRisingScore
+      : campaignPolicy?.minRisingScore ?? fallbackMinRisingScore;
+    const minSubscriberCount = campaignPolicy?.minSubscriberCount
+      ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY.minSubscriberCount;
     const brandResult: AutoCommentDispatchResult["results"][number] = {
       brandId: brand.id,
       brandName: campaignBrand.name,
       posted: 0,
       skipped: 0,
       failed: 0,
+      policy: {
+        minSubscriberCount,
+        maxVideoAgeHours,
+        minRelevanceScore,
+        minRisingScore,
+      },
       details: [],
     };
     result.results.push(brandResult);
@@ -522,7 +555,7 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         brandResult.details.push({ postId: candidate.id, skipped: true, reason: retryReason });
         continue;
       }
-      if (!meetsYouTubeSubscriberMinimum(youtubeSubscriberCount(candidate))) {
+      if (!meetsYouTubeSubscriberMinimum(youtubeSubscriberCount(candidate), minSubscriberCount)) {
         await markDispatchAttempt({ post: candidate, status: "skipped", reason: "subscriber_gate" });
         brandResult.skipped += 1;
         result.skipped += 1;

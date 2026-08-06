@@ -1,5 +1,9 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { getSupabaseAdmin } from "./supabase-admin";
+import {
+  normalizeSocialDiscoveryYouTubePolicy,
+  youtubePolicyFromPrompt,
+} from "./social-discovery-youtube-policy";
 import type {
   BrandRecord,
   CampaignRecord,
@@ -251,6 +255,7 @@ const BRAND_SELECT_COLUMNS = [
   "social_discovery_youtube_subscriptions",
   "social_discovery_youtube_auto_comment_enabled",
   "social_discovery_search_strategy",
+  "social_discovery_youtube_policy",
   "operable_personas",
   "available_assets",
   "target_markets",
@@ -268,6 +273,7 @@ const OPTIONAL_BRAND_COLUMNS = [
   "social_discovery_youtube_subscriptions",
   "social_discovery_youtube_auto_comment_enabled",
   "social_discovery_search_strategy",
+  "social_discovery_youtube_policy",
   "operable_personas",
   "available_assets",
 ] as const;
@@ -526,6 +532,9 @@ const mapBrandRow = (input: unknown): BrandRecord => {
   const notesRaw = String(row.notes ?? "");
   const promptFromNotes = extractSocialDiscoveryCommentPromptFromNotes(notesRaw);
   const queriesFromNotes = extractSocialDiscoveryQueriesFromNotes(notesRaw);
+  const socialDiscoveryCommentPrompt = String(
+    row.social_discovery_comment_prompt ?? row.socialDiscoveryCommentPrompt ?? promptFromNotes
+  );
   return {
     id: String(row.id ?? ""),
     name: String(row.name ?? "Untitled Brand"),
@@ -533,9 +542,7 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     tone: String(row.tone ?? ""),
     notes: stripSocialDiscoveryMetadataFromNotes(notesRaw),
     product: String(row.product ?? ""),
-    socialDiscoveryCommentPrompt: String(
-      row.social_discovery_comment_prompt ?? row.socialDiscoveryCommentPrompt ?? promptFromNotes
-    ),
+    socialDiscoveryCommentPrompt,
     socialDiscoveryPlatforms: normalizeStringArray(
       row.social_discovery_platforms ?? row.socialDiscoveryPlatforms ?? []
     ),
@@ -551,6 +558,11 @@ const mapBrandRow = (input: unknown): BrandRecord => {
     ),
     socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(
       row.social_discovery_search_strategy ?? row.socialDiscoverySearchStrategy
+    ),
+    socialDiscoveryYouTubePolicy: normalizeSocialDiscoveryYouTubePolicy(
+      row.social_discovery_youtube_policy ??
+        row.socialDiscoveryYouTubePolicy ??
+        youtubePolicyFromPrompt(socialDiscoveryCommentPrompt)
     ),
     operablePersonas: normalizeStringArray(
       row.operable_personas ?? row.operablePersonas ?? row.real_personas ?? row.realPersonas
@@ -769,6 +781,7 @@ export async function createBrand(input: {
   socialDiscoveryYouTubeSubscriptions?: BrandRecord["socialDiscoveryYouTubeSubscriptions"];
   socialDiscoveryYouTubeAutoCommentEnabled?: boolean;
   socialDiscoverySearchStrategy?: BrandRecord["socialDiscoverySearchStrategy"];
+  socialDiscoveryYouTubePolicy?: BrandRecord["socialDiscoveryYouTubePolicy"];
   operablePersonas?: string[];
   availableAssets?: string[];
   targetMarkets?: string[];
@@ -792,6 +805,7 @@ export async function createBrand(input: {
     ),
     socialDiscoveryYouTubeAutoCommentEnabled: Boolean(input.socialDiscoveryYouTubeAutoCommentEnabled),
     socialDiscoverySearchStrategy: normalizeSocialDiscoverySearchStrategy(input.socialDiscoverySearchStrategy),
+    socialDiscoveryYouTubePolicy: normalizeSocialDiscoveryYouTubePolicy(input.socialDiscoveryYouTubePolicy),
     operablePersonas: normalizeStringArray(input.operablePersonas),
     availableAssets: normalizeStringArray(input.availableAssets),
     targetMarkets: normalizeStringArray(input.targetMarkets),
@@ -824,6 +838,7 @@ export async function createBrand(input: {
       social_discovery_youtube_subscriptions: brand.socialDiscoveryYouTubeSubscriptions,
       social_discovery_youtube_auto_comment_enabled: brand.socialDiscoveryYouTubeAutoCommentEnabled,
       social_discovery_search_strategy: brand.socialDiscoverySearchStrategy ?? {},
+      social_discovery_youtube_policy: brand.socialDiscoveryYouTubePolicy ?? {},
       operable_personas: brand.operablePersonas,
       available_assets: brand.availableAssets,
       target_markets: brand.targetMarkets,
@@ -847,6 +862,7 @@ export async function createBrand(input: {
       delete legacyInsertPayload.social_discovery_youtube_subscriptions;
       delete legacyInsertPayload.social_discovery_youtube_auto_comment_enabled;
       delete legacyInsertPayload.social_discovery_search_strategy;
+      delete legacyInsertPayload.social_discovery_youtube_policy;
       delete legacyInsertPayload.operable_personas;
       delete legacyInsertPayload.available_assets;
       const retried = await supabase
@@ -888,6 +904,7 @@ export async function updateBrand(
       | "socialDiscoveryYouTubeSubscriptions"
       | "socialDiscoveryYouTubeAutoCommentEnabled"
       | "socialDiscoverySearchStrategy"
+      | "socialDiscoveryYouTubePolicy"
       | "operablePersonas"
       | "availableAssets"
       | "targetMarkets"
@@ -952,6 +969,11 @@ export async function updateBrand(
     if (patch.socialDiscoverySearchStrategy !== undefined) {
       update.social_discovery_search_strategy = normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy) ?? {};
     }
+    if (patch.socialDiscoveryYouTubePolicy !== undefined) {
+      update.social_discovery_youtube_policy = normalizeSocialDiscoveryYouTubePolicy(
+        patch.socialDiscoveryYouTubePolicy
+      ) ?? {};
+    }
     if (Array.isArray(patch.operablePersonas)) update.operable_personas = patch.operablePersonas;
     if (Array.isArray(patch.availableAssets)) update.available_assets = patch.availableAssets;
     if (Array.isArray(patch.targetMarkets)) update.target_markets = patch.targetMarkets;
@@ -977,6 +999,7 @@ export async function updateBrand(
       delete update.social_discovery_youtube_subscriptions;
       delete update.social_discovery_youtube_auto_comment_enabled;
       delete update.social_discovery_search_strategy;
+      delete update.social_discovery_youtube_policy;
       delete update.operable_personas;
       delete update.available_assets;
       const retried = await supabase
@@ -1013,6 +1036,10 @@ export async function updateBrand(
       patch.socialDiscoverySearchStrategy !== undefined
         ? normalizeSocialDiscoverySearchStrategy(patch.socialDiscoverySearchStrategy)
         : mapBrandRow(existing).socialDiscoverySearchStrategy,
+    socialDiscoveryYouTubePolicy:
+      patch.socialDiscoveryYouTubePolicy !== undefined
+        ? normalizeSocialDiscoveryYouTubePolicy(patch.socialDiscoveryYouTubePolicy)
+        : mapBrandRow(existing).socialDiscoveryYouTubePolicy,
     updatedAt: nowIso(),
   };
   if (index < 0) {

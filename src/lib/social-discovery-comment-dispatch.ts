@@ -25,6 +25,7 @@ import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
 
 type AutoCommentDispatchOptions = {
+  enabled?: boolean;
   brandIds?: string[];
   scanAllBrands?: boolean;
   dryRun?: boolean;
@@ -38,6 +39,10 @@ type AutoCommentDispatchOptions = {
   candidateLimit?: number;
   minRelevanceScore?: number;
   minRisingScore?: number;
+  accountRoles?: {
+    openingAccountId: string;
+    replyAccountId: string;
+  };
 };
 
 type AutoCommentDispatchResult = {
@@ -282,7 +287,23 @@ function chooseAccounts(input: {
   accounts: OutreachAccount[];
   recentAccountCounts: Map<string, number>;
   perAccountHourlyCap: number;
+  accountRoles?: AutoCommentDispatchOptions["accountRoles"];
 }) {
+  if (input.accountRoles) {
+    const byId = new Map(input.accounts.map((account) => [account.id, account]));
+    const primary = byId.get(input.accountRoles.openingAccountId) ?? null;
+    const reply = byId.get(input.accountRoles.replyAccountId) ?? null;
+    if (!primary || !reply || primary.id === reply.id) {
+      return { primary: null, reply: null, reason: "assigned_accounts_unavailable" };
+    }
+    if (
+      (input.recentAccountCounts.get(primary.id) ?? 0) >= input.perAccountHourlyCap ||
+      (input.recentAccountCounts.get(reply.id) ?? 0) >= input.perAccountHourlyCap
+    ) {
+      return { primary: null, reply: null, reason: "assigned_account_cap_reached" };
+    }
+    return { primary, reply, reason: "" };
+  }
   const recommended = recommendedAccountIds(input.post);
   const byId = new Map(input.accounts.map((account) => [account.id, account]));
   const ordered = [
@@ -294,7 +315,7 @@ function chooseAccounts(input: {
   );
   const primary = available[0] ?? null;
   const reply = primary ? available.find((account) => account.id !== primary.id) ?? null : null;
-  return { primary, reply };
+  return { primary, reply, reason: primary ? "" : "account_cap_reached" };
 }
 
 function recentChannelIds(posts: SocialDiscoveryPost[], sinceMs: number) {
@@ -333,7 +354,7 @@ async function resolveBrands(input: AutoCommentDispatchOptions) {
 export async function runSocialDiscoveryAutoCommentDispatchTick(
   options: AutoCommentDispatchOptions = {}
 ): Promise<AutoCommentDispatchResult> {
-  const enabled = boolEnv("SOCIAL_DISCOVERY_AUTO_COMMENT_ENABLED", false);
+  const enabled = options.enabled ?? boolEnv("SOCIAL_DISCOVERY_AUTO_COMMENT_ENABLED", false);
   const dryRun = Boolean(options.dryRun ?? boolEnv("SOCIAL_DISCOVERY_AUTO_COMMENT_DRY_RUN", false));
   const hourlyCap = numberOption(options.hourlyCap ?? process.env.SOCIAL_DISCOVERY_AUTO_COMMENT_HOURLY_CAP, 10, 1, 100);
   const perRunCap = numberOption(
@@ -531,16 +552,17 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         continue;
       }
 
-      const { primary, reply } = chooseAccounts({
+      const { primary, reply, reason: accountReason } = chooseAccounts({
         post: candidate,
         accounts,
         recentAccountCounts,
         perAccountHourlyCap,
+        accountRoles: options.accountRoles,
       });
       if (!primary) {
         brandResult.skipped += 1;
         result.skipped += 1;
-        brandResult.details.push({ postId: candidate.id, skipped: true, reason: "account_cap_reached" });
+        brandResult.details.push({ postId: candidate.id, skipped: true, reason: accountReason || "account_cap_reached" });
         continue;
       }
 

@@ -536,6 +536,20 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
       recentActivity24h: Math.max(0, Number(social.recentActivity24h ?? social.recent_activity_24h ?? 0) || 0),
       recentActivity7d: Math.max(0, Number(social.recentActivity7d ?? social.recent_activity_7d ?? 0) || 0),
       coordinationGroup: String(social.coordinationGroup ?? social.coordination_group ?? "").trim(),
+      tapInAssignments: asArray(social.tapInAssignments ?? social.tapin_assignments)
+        .map((entry) => asRecord(entry))
+        .map((entry) => ({
+          brandId: String(entry.brandId ?? entry.brand_id ?? "").trim(),
+          role: String(entry.role ?? "").trim().toLowerCase(),
+          updatedAt: String(entry.updatedAt ?? entry.updated_at ?? "").trim(),
+        }))
+        .filter(
+          (entry): entry is OutreachAccountConfig["social"]["tapInAssignments"][number] =>
+            Boolean(entry.brandId) &&
+            (entry.role === "opening" || entry.role === "reply") &&
+            !Number.isNaN(Date.parse(entry.updatedAt))
+        )
+        .slice(0, 50),
       notes: String(social.notes ?? "").trim(),
     },
     mailbox: {

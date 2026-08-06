@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBrandById, updateBrand } from "@/lib/factory-data";
-import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
+import { getTapInWorkspaceForUser, saveTapInYouTubeRoles } from "@/lib/tapinsocial-auth";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -80,6 +80,7 @@ export async function POST(request: Request) {
   const tenant = asRecord(setup.tenant);
   const commentVoice = asRecord(autopilot.commentVoice);
   const prompts = asRecord(autopilot.prompts);
+  const youtubeRoles = asRecord(autopilot.youtubeRoles);
   const brandMention = asRecord(autopilot.brandMention);
   const account = asRecord(setup.account);
   const connections = asRecord(account.connections);
@@ -120,6 +121,24 @@ export async function POST(request: Request) {
   );
   const active = setup.status !== "paused";
   const youtubeConnected = connections.youtube === true;
+
+  if (active && youtubeConnected && platforms.includes("youtube")) {
+    try {
+      await saveTapInYouTubeRoles({
+        workspace,
+        openingAccountId: String(youtubeRoles.openingAccountId ?? "").trim(),
+        replyAccountId: String(youtubeRoles.replyAccountId ?? "").trim(),
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: error instanceof Error ? error.message : "YouTube channel roles could not be saved.",
+        },
+        { status: 400 }
+      );
+    }
+  }
 
   const updated = await updateBrand(brandId, {
     socialDiscoveryCommentPrompt: contextualCommentPrompt({

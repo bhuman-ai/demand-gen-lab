@@ -175,6 +175,70 @@ export function workspaceOwnsYouTubeAccount(workspace: TapInAuthWorkspace, accou
   return workspace.youtubeAccounts.some((entry) => entry.accountId === accountId.trim());
 }
 
+function isUsableTapInYouTubeAccount(account: Awaited<ReturnType<typeof getOutreachAccount>>) {
+  return Boolean(
+    account &&
+      account.status === "active" &&
+      account.config.social.enabled &&
+      account.config.social.connectionProvider === "youtube" &&
+      account.config.social.linkedProvider === "youtube" &&
+      account.config.social.platforms.includes("youtube")
+  );
+}
+
+export async function saveTapInYouTubeRoles(input: {
+  workspace: TapInAuthWorkspace;
+  openingAccountId: string;
+  replyAccountId: string;
+}) {
+  const openingAccountId = input.openingAccountId.trim();
+  const replyAccountId = input.replyAccountId.trim();
+  if (!openingAccountId || !replyAccountId || openingAccountId === replyAccountId) {
+    throw new Error("Choose two different connected YouTube channels.");
+  }
+  if (
+    !workspaceOwnsYouTubeAccount(input.workspace, openingAccountId) ||
+    !workspaceOwnsYouTubeAccount(input.workspace, replyAccountId)
+  ) {
+    throw new Error("The selected YouTube channels do not belong to this TapIn workspace.");
+  }
+
+  const workspaceAccountIds = Array.from(
+    new Set(input.workspace.youtubeAccounts.map((account) => account.accountId).filter(Boolean))
+  );
+  const accounts = await Promise.all(
+    workspaceAccountIds.map((accountId) => getOutreachAccount(accountId))
+  );
+  const opening = accounts.find((account) => account?.id === openingAccountId) ?? null;
+  const reply = accounts.find((account) => account?.id === replyAccountId) ?? null;
+  if (!isUsableTapInYouTubeAccount(opening) || !isUsableTapInYouTubeAccount(reply)) {
+    throw new Error("Both selected YouTube channels must still be connected.");
+  }
+
+  const updatedAt = new Date().toISOString();
+  const updates = accounts.filter(Boolean).map(async (account) => {
+    const existing = account!.config.social.tapInAssignments.filter(
+      (assignment) => assignment.brandId !== input.workspace.brandId
+    );
+    const role =
+      account!.id === openingAccountId
+        ? "opening"
+        : account!.id === replyAccountId
+          ? "reply"
+          : "";
+    const tapInAssignments = role
+      ? [...existing, { brandId: input.workspace.brandId, role, updatedAt }]
+      : existing;
+    const updated = await updateOutreachAccount(account!.id, {
+      config: { social: { tapInAssignments } },
+    });
+    if (!updated) throw new Error("TapIn YouTube roles could not be saved.");
+    return updated;
+  });
+  await Promise.all(updates);
+  return { openingAccountId, replyAccountId };
+}
+
 export async function createTapInYouTubeConnectAccount(userId: string) {
   const workspace = await getTapInWorkspaceForUser(userId);
   if (!workspace) throw new Error("TapIn workspace ownership could not be verified.");

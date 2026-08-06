@@ -1,8 +1,12 @@
 export const MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS = 100;
 
-export function meetsYouTubeSubscriberMinimum(value: unknown) {
+export function meetsYouTubeSubscriberMinimum(
+  value: unknown,
+  minimum = MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS
+) {
   const count = Number(value);
-  return Number.isFinite(count) && count >= MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS;
+  const normalizedMinimum = Math.max(0, Number(minimum) || 0);
+  return Number.isFinite(count) && count >= normalizedMinimum;
 }
 
 export function youtubeSubscriberMinimumMessage() {

@@ -2,11 +2,13 @@ import { createId, type BrandRecord } from "@/lib/factory-data";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
 import { buildScoredSocialDiscoveryPost } from "@/lib/social-discovery";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
-import {
-  meetsYouTubeSubscriberMinimum,
-  MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS,
-} from "@/lib/social-discovery-youtube-eligibility";
+import { meetsYouTubeSubscriberMinimum } from "@/lib/social-discovery-youtube-eligibility";
 import { searchYouTubeVideos } from "@/lib/youtube";
+import {
+  DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
+  normalizeSocialDiscoveryYouTubePolicy,
+  type SocialDiscoveryYouTubePolicy,
+} from "@/lib/social-discovery-youtube-policy";
 
 export { MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS } from "@/lib/social-discovery-youtube-eligibility";
 
@@ -47,9 +49,12 @@ function isoHoursAgo(hours: number) {
   return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
 }
 
-export function isEligibleYouTubeDiscoveryPost(post: SocialDiscoveryPost) {
-  const minRelevanceScore = numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RELEVANCE_SCORE", 18, 0, 100);
-  const minRisingScore = numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RISING_SCORE", 30, 0, 100);
+export function isEligibleYouTubeDiscoveryPost(
+  post: SocialDiscoveryPost,
+  policy?: SocialDiscoveryYouTubePolicy | null
+) {
+  const minRelevanceScore = policy?.minRelevanceScore ?? numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RELEVANCE_SCORE", 18, 0, 100);
+  const minRisingScore = policy?.minRisingScore ?? numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RISING_SCORE", 30, 0, 100);
   const plan = post.interactionPlan;
   if (post.relevanceScore < minRelevanceScore) return false;
   if (post.risingScore < minRisingScore) return false;
@@ -63,6 +68,7 @@ function buildYouTubeDiscoveryPost(input: {
   query: string;
   index: number;
   result: Awaited<ReturnType<typeof searchYouTubeVideos>>[number];
+  policy: SocialDiscoveryYouTubePolicy;
 }): SocialDiscoveryPost | null {
   const { result } = input;
   const now = new Date().toISOString();
@@ -101,7 +107,7 @@ function buildYouTubeDiscoveryPost(input: {
         thumbnailUrl: result.thumbnailUrl,
         subscriberCount: result.subscriberCount,
         subscriberGate:
-          meetsYouTubeSubscriberMinimum(result.subscriberCount)
+          meetsYouTubeSubscriberMinimum(result.subscriberCount, input.policy.minSubscriberCount)
             ? "meets_subscriber_gate"
             : "below_subscriber_gate",
         source: "youtube-data-api",
@@ -121,12 +127,19 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
   maxResults?: number;
   secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
   preferApiKey?: boolean;
+  policy?: SocialDiscoveryYouTubePolicy | null;
 }) {
   const queries = input.queries
     .map((query) => String(query ?? "").replace(/\s+/g, " ").trim())
     .filter(Boolean);
   const maxResults = Math.max(1, Math.min(25, Number(input.maxResults ?? 12) || 12));
-  const publishedAfter = isoHoursAgo(socialDiscoveryLookbackHours());
+  const policy = normalizeSocialDiscoveryYouTubePolicy(input.policy, {
+    ...DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
+    maxVideoAgeHours: socialDiscoveryLookbackHours(),
+    minRelevanceScore: numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RELEVANCE_SCORE", 18, 0, 100),
+    minRisingScore: numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RISING_SCORE", 30, 0, 100),
+  }) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
+  const publishedAfter = isoHoursAgo(policy.maxVideoAgeHours);
   const posts: SocialDiscoveryPost[] = [];
   const errors: YouTubeDiscoveryError[] = [];
   const queryStats: YouTubeDiscoveryQueryStats[] = [];
@@ -145,7 +158,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
       });
       found += results.length;
       const eligibleResults = results.filter((result) =>
-        meetsYouTubeSubscriberMinimum(result.subscriberCount)
+        meetsYouTubeSubscriberMinimum(result.subscriberCount, policy.minSubscriberCount)
       );
       eligible += eligibleResults.length;
       const builtPosts = eligibleResults
@@ -155,10 +168,11 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
             query,
             index,
             result,
+            policy,
           })
         )
         .filter((post): post is SocialDiscoveryPost => Boolean(post));
-      const acceptedPosts = builtPosts.filter(isEligibleYouTubeDiscoveryPost);
+      const acceptedPosts = builtPosts.filter((post) => isEligibleYouTubeDiscoveryPost(post, policy));
       posts.push(...acceptedPosts);
       queryStats.push({
         query,
@@ -198,7 +212,10 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
       found,
       eligible,
       accepted: posts.length,
-      minSubscriberCount: MIN_YOUTUBE_DISCOVERY_SUBSCRIBERS,
+      minSubscriberCount: policy.minSubscriberCount,
+      maxVideoAgeHours: policy.maxVideoAgeHours,
+      minRelevanceScore: policy.minRelevanceScore,
+      minRisingScore: policy.minRisingScore,
     },
   };
 }

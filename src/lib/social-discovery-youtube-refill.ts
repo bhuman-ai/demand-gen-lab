@@ -212,6 +212,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       maxResults: limitPerQuery,
       secrets: youtubeSearchCredentials?.secrets,
       preferApiKey: true,
+      policy: brand.socialDiscoveryYouTubePolicy,
     });
     const strategyPosts = annotatePostsWithQueryStrategy({
       posts: discovery.posts,
@@ -248,6 +249,12 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       found: discovery.summary.found,
       eligible: discovery.summary.eligible,
       accepted: discovery.summary.accepted,
+      policy: {
+        minSubscriberCount: discovery.summary.minSubscriberCount,
+        maxVideoAgeHours: discovery.summary.maxVideoAgeHours,
+        minRelevanceScore: discovery.summary.minRelevanceScore,
+        minRisingScore: discovery.summary.minRisingScore,
+      },
       saved: savedPosts.length,
       errors: discovery.errors.length,
       queryDiagnostics,

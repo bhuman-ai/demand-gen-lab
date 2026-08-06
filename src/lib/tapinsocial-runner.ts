@@ -50,17 +50,23 @@ export async function resolveTapInAccountRoles(brandId: string) {
   const assignedReplyIds = assigned
     .filter((assignment) => assignment.role === "reply" || assignment.role === "both")
     .map((assignment) => assignment.accountId);
+  const hasAssignments = assigned.length > 0;
+  const campaignType: "comment" | "thread" = hasAssignments && assignedReplyIds.length === 0 ? "comment" : "thread";
   const openingAccountIds = assignedOpeningIds.length
     ? assignedOpeningIds
     : [String(process.env.TAPIN_SOCIAL_OPENING_ACCOUNT_ID ?? "").trim()].filter(Boolean);
-  const replyAccountIds = assignedReplyIds.length
-    ? assignedReplyIds
-    : [String(process.env.TAPIN_SOCIAL_REPLY_ACCOUNT_ID ?? "").trim()].filter(Boolean);
+  const replyAccountIds = campaignType === "comment"
+    ? []
+    : assignedReplyIds.length
+      ? assignedReplyIds
+      : [String(process.env.TAPIN_SOCIAL_REPLY_ACCOUNT_ID ?? "").trim()].filter(Boolean);
   const accountIds = new Set(accounts.map((account) => account.id));
   const usableOpeningIds = Array.from(new Set(openingAccountIds.filter((accountId) => accountIds.has(accountId))));
   const usableReplyIds = Array.from(new Set(replyAccountIds.filter((accountId) => accountIds.has(accountId))));
-  const ready = usableOpeningIds.some((openingId) => usableReplyIds.some((replyId) => replyId !== openingId));
-  return { ready, openingAccountIds: usableOpeningIds, replyAccountIds: usableReplyIds };
+  const ready = campaignType === "comment"
+    ? usableOpeningIds.length > 0
+    : usableOpeningIds.some((openingId) => usableReplyIds.some((replyId) => replyId !== openingId));
+  return { ready, campaignType, openingAccountIds: usableOpeningIds, replyAccountIds: usableReplyIds };
 }
 
 export async function getTapInRunnerBrandState(brandId: string) {
@@ -68,6 +74,7 @@ export async function getTapInRunnerBrandState(brandId: string) {
   const allowed = config.brandIds.includes(brandId);
   const roles = allowed ? await resolveTapInAccountRoles(brandId) : {
     ready: false,
+    campaignType: "thread" as const,
     openingAccountIds: [],
     replyAccountIds: [],
   };
@@ -125,6 +132,7 @@ export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
       perRunCap: envNumber("TAPIN_SOCIAL_PER_RUN_CAP", 1, 1, 5),
       perAccountHourlyCap: envNumber("TAPIN_SOCIAL_PER_ACCOUNT_HOURLY_CAP", 1, 1, 10),
       accountRoles: {
+        campaignType: roles.campaignType,
         openingAccountIds: roles.openingAccountIds,
         replyAccountIds: roles.replyAccountIds,
       },

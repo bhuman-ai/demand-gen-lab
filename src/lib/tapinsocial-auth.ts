@@ -188,12 +188,14 @@ function isUsableTapInYouTubeAccount(account: Awaited<ReturnType<typeof getOutre
 
 export async function saveTapInYouTubeRoles(input: {
   workspace: TapInAuthWorkspace;
+  campaignType?: "comment" | "thread";
   accountIds?: string[];
   openingAccountIds?: string[];
   replyAccountIds?: string[];
   openingAccountId?: string;
   replyAccountId?: string;
 }) {
+  const campaignType = input.campaignType === "comment" ? "comment" : "thread";
   const uniqueIds = (values: Array<string | undefined>) =>
     Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean)));
   const legacyOpeningAccountId = String(input.openingAccountId ?? "").trim();
@@ -209,14 +211,19 @@ export async function saveTapInYouTubeRoles(input: {
   const openingAccountIds = uniqueIds(
     input.openingAccountIds?.length ? input.openingAccountIds : [legacyOpeningAccountId]
   ).filter((accountId) => accountIds.includes(accountId));
-  const replyAccountIds = uniqueIds(
-    input.replyAccountIds?.length ? input.replyAccountIds : [legacyReplyAccountId]
-  ).filter((accountId) => accountIds.includes(accountId));
+  const replyAccountIds = campaignType === "comment"
+    ? []
+    : uniqueIds(
+        input.replyAccountIds?.length ? input.replyAccountIds : [legacyReplyAccountId]
+      ).filter((accountId) => accountIds.includes(accountId));
   const hasDistinctPair = openingAccountIds.some((openingId) =>
     replyAccountIds.some((replyId) => replyId !== openingId)
   );
 
-  if (accountIds.length < 2 || !openingAccountIds.length || !replyAccountIds.length || !hasDistinctPair) {
+  if (!accountIds.length || !openingAccountIds.length) {
+    throw new Error("Choose at least one connected YouTube channel.");
+  }
+  if (campaignType === "thread" && (accountIds.length < 2 || !replyAccountIds.length || !hasDistinctPair)) {
     throw new Error("Choose at least two connected YouTube channels with different opening and reply options.");
   }
   if (accountIds.some((accountId) => !workspaceOwnsYouTubeAccount(input.workspace, accountId))) {
@@ -252,7 +259,7 @@ export async function saveTapInYouTubeRoles(input: {
     return updated;
   });
   await Promise.all(updates);
-  return { accountIds, openingAccountIds, replyAccountIds };
+  return { campaignType, accountIds, openingAccountIds, replyAccountIds };
 }
 
 export async function createTapInYouTubeConnectAccount(userId: string) {

@@ -38,6 +38,7 @@ function strings(value: unknown, limit = 12) {
 }
 
 function contextualCommentPrompt(input: {
+  campaignType: "comment" | "thread";
   brandName: string;
   positioning: string;
   voice: string;
@@ -56,8 +57,10 @@ function contextualCommentPrompt(input: {
     "Voice example: " + input.voiceSample,
     "Opening comment instructions:",
     input.openingCommentPrompt,
-    "Delayed reply instructions:",
-    input.delayedReplyPrompt,
+    input.campaignType === "thread"
+      ? "Delayed reply instructions:"
+      : "Campaign type: Comment only. Do not generate or schedule a reply.",
+    input.campaignType === "thread" ? input.delayedReplyPrompt : "",
     "Runtime context:",
     "- TapIn supplies the matched YouTube video title and description to the generator automatically.",
     "- Opening comment instructions apply only to commentDraft.",
@@ -134,11 +137,13 @@ export async function POST(request: Request) {
     youtubeDiscovery,
     DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
   ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
+  const campaignType = youtubeRoles.campaignType === "comment" ? "comment" : "thread";
 
   if (active && youtubeConnected && platforms.includes("youtube")) {
     try {
       await saveTapInYouTubeRoles({
         workspace,
+        campaignType,
         accountIds: strings(youtubeRoles.accountIds, 50),
         openingAccountIds: strings(youtubeRoles.openingAccountIds, 50),
         replyAccountIds: strings(youtubeRoles.replyAccountIds, 50),
@@ -158,6 +163,7 @@ export async function POST(request: Request) {
 
   const updated = await updateBrand(brandId, {
     socialDiscoveryCommentPrompt: contextualCommentPrompt({
+      campaignType,
       brandName: requestedBrandName,
       positioning,
       voice: String(commentVoice.preset ?? setup.voice ?? "Warm").trim(),

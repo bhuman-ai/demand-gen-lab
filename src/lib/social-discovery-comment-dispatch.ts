@@ -47,6 +47,7 @@ type AutoCommentDispatchOptions = {
   minRelevanceScore?: number;
   minRisingScore?: number;
   accountRoles?: {
+    campaignType: "comment" | "thread";
     openingAccountIds: string[];
     replyAccountIds: string[];
   };

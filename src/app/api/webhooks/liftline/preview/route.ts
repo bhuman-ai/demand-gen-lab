@@ -34,13 +34,14 @@ export async function POST(request: Request) {
   const body = asRecord(await request.json().catch(() => ({})));
   const userId = requiredText(body.userId, 120);
   const brandId = requiredText(body.brandId, 120);
+  const campaignType = body.campaignType === "comment" ? "comment" : "thread";
   const openingPrompt = requiredText(body.openingPrompt, 2000);
   const replyPrompt = requiredText(body.replyPrompt, 2000);
   const videoTitle = requiredText(body.videoTitle, 400);
   const videoDescription = requiredText(body.videoDescription, 4000);
-  if (!userId || !brandId || !openingPrompt || !replyPrompt || !videoTitle || !videoDescription) {
+  if (!userId || !brandId || !openingPrompt || (campaignType === "thread" && !replyPrompt) || !videoTitle || !videoDescription) {
     return NextResponse.json(
-      { error: "Opening prompt, reply prompt, and video context are required." },
+      { error: campaignType === "thread" ? "Opening prompt, reply prompt, and video context are required." : "Opening prompt and video context are required." },
       { status: 400 }
     );
   }
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
 
   try {
     const preview = await generateTapInThreadPreview({
+      campaignType,
       brandName: brand.name,
       openingPrompt,
       replyPrompt,

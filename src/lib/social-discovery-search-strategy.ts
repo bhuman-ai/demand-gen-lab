@@ -1,5 +1,5 @@
 import { getBrandById, listBrands, updateBrand, type BrandRecord } from "@/lib/factory-data";
-import { resolveLlmModel } from "@/lib/llm-router";
+import { generateJsonWithLlm } from "@/lib/llm-json";
 import { buildSocialDiscoveryQueries } from "@/lib/social-discovery";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import type {
@@ -409,19 +409,6 @@ function buildSearchStrategyPrompt(input: {
   ].join("\n");
 }
 
-function extractOpenAiOutputText(payloadRaw: unknown) {
-  const payload = asRecord(payloadRaw);
-  const direct = String(payload.output_text ?? "").trim();
-  if (direct) return direct;
-  for (const item of asArray(payload.output)) {
-    for (const content of asArray(asRecord(item).content)) {
-      const text = String(asRecord(content).text ?? "").trim();
-      if (text) return text;
-    }
-  }
-  return "";
-}
-
 function parseLooseJsonObject(rawText: string) {
   const trimmed = rawText.trim();
   if (!trimmed) return {};
@@ -446,29 +433,18 @@ async function requestLlmPortfolio(input: {
   maxQueries: number;
   fallbackEntries: SocialDiscoverySearchStrategyQuery[];
 }) {
-  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
-  if (!apiKey) return [];
+  if (!String(process.env.OPENROUTER_API_KEY ?? "").trim()) return [];
   const prompt = buildSearchStrategyPrompt(input);
-  const model = resolveLlmModel("social_search_planning", {
+  const result = await generateJsonWithLlm({
+    task: "social_search_planning",
     prompt,
-    legacyModelEnv: String(process.env.OPENAI_MODEL_SOCIAL_SEARCH_PLANNING ?? "").trim() || "gpt-5.4",
+    format: { type: "json_object" },
+    maxOutputTokens: 1600,
+    providerOverride: "openrouter",
+    openRouterOverrideModel:
+      String(process.env.OPENROUTER_MODEL_SOCIAL_SEARCH_PLANNING ?? "").trim() || undefined,
   });
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 1600,
-    }),
-  });
-  if (!response.ok) return [];
-  const payload = JSON.parse(await response.text());
-  const parsed = asRecord(parseLooseJsonObject(extractOpenAiOutputText(payload)));
+  const parsed = asRecord(parseLooseJsonObject(result.text));
   return asArray(parsed.queries ?? parsed.searchQueries)
     .map((entry) => {
       const row = typeof entry === "string" ? { query: entry } : asRecord(entry);

@@ -1,5 +1,5 @@
 import { createId, type BrandRecord } from "@/lib/factory-data";
-import { resolveLlmModel } from "@/lib/llm-router";
+import { generateJsonWithLlm } from "@/lib/llm-json";
 import { listSocialRoutingAccounts } from "@/lib/outreach-data";
 import {
   brandMentionCount,
@@ -2001,21 +2001,6 @@ function markSnippetFallback(post: SocialDiscoveryPost): SocialDiscoveryPost {
   };
 }
 
-function extractOpenAiOutputText(payloadRaw: unknown) {
-  const payload = asRecord(payloadRaw);
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  const contentTexts = output
-    .map((item) => asRecord(item))
-    .flatMap((item) => {
-      const content = Array.isArray(item.content) ? item.content : [];
-      return content
-        .map((entry) => asRecord(entry))
-        .map((entry) => String(entry.text ?? ""))
-        .filter(Boolean);
-    });
-  return String(payload.output_text ?? "") || String(contentTexts[0] ?? "") || "{}";
-}
-
 function parseLooseJsonObject(rawText: string): unknown {
   const direct = rawText.trim();
   if (!direct) return {};
@@ -2133,7 +2118,9 @@ export function buildSocialCommentPlanningPrompt(input: {
     draftMode === "thread"
       ? "Thread rules: commentDraft should work as a normal standalone YouTube comment. replyDraft should read like a real second person responding to that comment, not a coordinated ad. Do not make the first comment obviously tee up the brand."
       : "Solo rules: commentDraft must work alone. No setup for another account.",
-    "replyDraft rules: keep it under 24 words, make it sound like second person, do not overpraise, do not sound coordinated, and leave it empty if fake or unnecessary.",
+    draftMode === "thread"
+      ? "replyDraft rules: replyDraft is required whenever shouldComment is true. Keep it under 24 words, make it sound like a second person, do not overpraise, and do not sound coordinated. If no natural reply exists, set shouldComment to false and leave both drafts empty."
+      : "replyDraft rules: leave replyDraft empty in solo mode.",
     "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, replyDraft, assetNeeded, riskNotes, exitRules.",
     "",
     `draft_mode: ${draftMode}`,
@@ -2176,37 +2163,32 @@ export function buildSocialCommentPlanningPrompt(input: {
 }
 
 async function requestSocialCommentPlan(input: {
-  apiKey: string;
-  model: string;
   prompt: string;
 }) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: input.model,
-      input: input.prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 700,
-    }),
+  const result = await generateJsonWithLlm({
+    task: "social_comment_planning",
+    prompt: input.prompt,
+    format: { type: "json_object" },
+    maxOutputTokens: 700,
+    providerOverride: "openrouter",
+    openRouterOverrideModel:
+      String(process.env.OPENROUTER_MODEL_SOCIAL_COMMENT_PLANNING ?? "").trim() || undefined,
   });
-  const raw = await response.text();
-  if (!response.ok) return null;
-  const payload = raw ? JSON.parse(raw) : {};
-  return asRecord(parseLooseJsonObject(extractOpenAiOutputText(payload)));
+  return asRecord(parseLooseJsonObject(result.text));
 }
 
 function youtubeForceDraftProblem(input: {
   platform: SocialDiscoveryPlatform;
   forceDraft: boolean;
+  draftMode: "solo" | "thread";
   brandName: string;
   commentDraft: string;
   replyDraft: string;
 }) {
   if (!input.forceDraft || input.platform !== "youtube") return "";
+  if (input.draftMode === "thread" && !input.replyDraft.trim()) {
+    return "missing replyDraft for thread mode";
+  }
   const combinedDraft = [input.commentDraft, input.replyDraft].filter(Boolean).join("\n");
   const mentionCount = brandMentionCount(combinedDraft, input.brandName);
   if (mentionCount === 0) return `missing ${input.brandName}`;
@@ -2227,9 +2209,6 @@ async function enhanceInteractionPlanWithLlm(
     mode?: "solo" | "thread";
   }
 ): Promise<SocialDiscoveryPost> {
-  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
-  if (!apiKey) return input.post;
-
   const plan = input.post.interactionPlan as EnrichedInteractionPlan;
   if (!options?.force && !shouldEnhanceInteractionPlanWithLlm(input.post)) return input.post;
   const draftMode = options?.mode === "thread" ? "thread" : "solo";
@@ -2242,13 +2221,8 @@ async function enhanceInteractionPlanWithLlm(
 
   try {
     const brandName = commentBrandName(input.brand.name);
-    const model = resolveLlmModel("social_comment_planning", {
-      prompt,
-      legacyModelEnv: String(process.env.OPENAI_MODEL_SOCIAL_COMMENT_PLANNING ?? "").trim() || "gpt-5.4",
-    });
     let promptUsed = prompt;
-    let row = await requestSocialCommentPlan({ apiKey, model, prompt: promptUsed });
-    if (!row) return input.post;
+    let row = await requestSocialCommentPlan({ prompt: promptUsed });
 
     let initialCommentDraft = compactText(row.commentDraft, 280);
     let initialReplyDraft = compactText(row.replyDraft, 220);
@@ -2257,6 +2231,7 @@ async function enhanceInteractionPlanWithLlm(
       ? youtubeForceDraftProblem({
           platform: input.post.platform,
           forceDraft: Boolean(options?.force),
+          draftMode,
           brandName,
           commentDraft: initialCommentDraft,
           replyDraft: initialReplyDraft,
@@ -2275,13 +2250,10 @@ async function enhanceInteractionPlanWithLlm(
         `Do not use generic side notes like 'we see that at ${brandName}' or 'we see that a lot at ${brandName}'.`,
         "Do not use a reusable template. Return JSON only.",
       ].join("\n");
-      const retryRow = await requestSocialCommentPlan({ apiKey, model, prompt: promptUsed });
-      if (retryRow) {
-        row = retryRow;
-        initialCommentDraft = compactText(row.commentDraft, 280);
-        initialReplyDraft = compactText(row.replyDraft, 220);
-        rowShouldComment = row.shouldComment === false ? false : true;
-      }
+      row = await requestSocialCommentPlan({ prompt: promptUsed });
+      initialCommentDraft = compactText(row.commentDraft, 280);
+      initialReplyDraft = compactText(row.replyDraft, 220);
+      rowShouldComment = row.shouldComment === false ? false : true;
     }
 
     const headline = compactText(row.headline, 140) || plan.headline;
@@ -2298,10 +2270,14 @@ async function enhanceInteractionPlanWithLlm(
       draftMode === "thread" && shouldComment && baseCommentDraft
         ? replyDraft || plan.sequence[1]?.draft || ""
         : "";
+    if (shouldComment && draftMode === "thread" && !baseReplyDraft) {
+      throw new Error("OpenRouter returned no replyDraft for a two-account thread.");
+    }
     const finalProblem = shouldComment
       ? youtubeForceDraftProblem({
           platform: input.post.platform,
           forceDraft,
+          draftMode,
           brandName,
           commentDraft: baseCommentDraft,
           replyDraft: baseReplyDraft,
@@ -2394,7 +2370,11 @@ async function enhanceInteractionPlanWithLlm(
           : [],
       },
     };
-  } catch {
+  } catch (error) {
+    if (options?.force) {
+      const message = error instanceof Error ? error.message : "Unknown OpenRouter error.";
+      throw new Error(`Social comment generation failed: ${message}`);
+    }
     return input.post;
   }
 }
@@ -2564,27 +2544,18 @@ function buildSocialDiscoverySearchPlanningPrompt(input: {
 }
 
 async function requestSocialSearchQueriesWithLlm(input: {
-  apiKey: string;
-  model: string;
   prompt: string;
 }) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: input.model,
-      input: input.prompt,
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 900,
-    }),
+  const result = await generateJsonWithLlm({
+    task: "social_search_planning",
+    prompt: input.prompt,
+    format: { type: "json_object" },
+    maxOutputTokens: 900,
+    providerOverride: "openrouter",
+    openRouterOverrideModel:
+      String(process.env.OPENROUTER_MODEL_SOCIAL_SEARCH_PLANNING ?? "").trim() || undefined,
   });
-  const raw = await response.text();
-  if (!response.ok) return null;
-  const payload = raw ? JSON.parse(raw) : {};
-  return asRecord(parseLooseJsonObject(extractOpenAiOutputText(payload)));
+  return asRecord(parseLooseJsonObject(result.text));
 }
 
 export async function brainstormSocialDiscoveryYouTubeQueries(input: {
@@ -2597,8 +2568,7 @@ export async function brainstormSocialDiscoveryYouTubeQueries(input: {
     platform: "youtube",
     maxQueries,
   });
-  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
-  if (!apiKey) return fallbackQueries;
+  if (!String(process.env.OPENROUTER_API_KEY ?? "").trim()) return fallbackQueries;
 
   const prompt = buildSocialDiscoverySearchPlanningPrompt({
     brand: input.brand,
@@ -2607,11 +2577,7 @@ export async function brainstormSocialDiscoveryYouTubeQueries(input: {
   });
 
   try {
-    const model = resolveLlmModel("social_search_planning", {
-      prompt,
-      legacyModelEnv: String(process.env.OPENAI_MODEL_SOCIAL_SEARCH_PLANNING ?? "").trim() || "gpt-5.4",
-    });
-    const row = await requestSocialSearchQueriesWithLlm({ apiKey, model, prompt });
+    const row = await requestSocialSearchQueriesWithLlm({ prompt });
     const llmQueries = normalizeYouTubeSearchQueryList(row?.searchQueries ?? row?.queries, maxQueries);
     return uniqueStrings([...llmQueries, ...fallbackQueries]).slice(0, maxQueries);
   } catch {

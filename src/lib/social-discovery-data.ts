@@ -600,12 +600,20 @@ export async function listSocialDiscoveryCommentedPostsSince(input: {
 }): Promise<SocialDiscoveryPost[]> {
   const limit = Math.max(1, Math.min(1000, Number(input.limit ?? 500) || 500));
   const sinceMs = Date.parse(input.since);
+  const latestDeliveryAt = (post: SocialDiscoveryPost) =>
+    [post.commentDelivery?.postedAt, post.commentDelivery?.replyDelivery?.postedAt]
+      .filter((value): value is string => Boolean(value))
+      .sort((first, second) => second.localeCompare(first))[0] ?? "";
   const isRecent = (post: SocialDiscoveryPost) => {
     if (post.brandId !== input.brandId) return false;
     if (input.platform && post.platform !== input.platform) return false;
-    const postedAt = post.commentDelivery?.postedAt ?? "";
-    const postedMs = Date.parse(postedAt);
-    return Number.isFinite(sinceMs) && Number.isFinite(postedMs) && postedMs >= sinceMs;
+    const commentPostedMs = Date.parse(post.commentDelivery?.postedAt ?? "");
+    const replyPostedMs = Date.parse(post.commentDelivery?.replyDelivery?.postedAt ?? "");
+    return (
+      Number.isFinite(sinceMs) &&
+      ((Number.isFinite(commentPostedMs) && commentPostedMs >= sinceMs) ||
+        (Number.isFinite(replyPostedMs) && replyPostedMs >= sinceMs))
+    );
   };
 
   const supabase = getSupabaseAdmin();
@@ -622,6 +630,7 @@ export async function listSocialDiscoveryCommentedPostsSince(input: {
       return (data ?? [])
         .map((row: unknown) => mapPostRow(row))
         .filter(isRecent)
+        .sort((left, right) => latestDeliveryAt(right).localeCompare(latestDeliveryAt(left)))
         .slice(0, limit);
     }
   }
@@ -629,7 +638,7 @@ export async function listSocialDiscoveryCommentedPostsSince(input: {
   const store = await readLocalStore();
   return store.posts
     .filter(isRecent)
-    .sort((left, right) => String(right.commentDelivery?.postedAt ?? "").localeCompare(String(left.commentDelivery?.postedAt ?? "")))
+    .sort((left, right) => latestDeliveryAt(right).localeCompare(latestDeliveryAt(left)))
     .slice(0, limit);
 }
 

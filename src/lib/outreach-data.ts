@@ -546,7 +546,7 @@ function sanitizeAccountConfig(value: unknown): OutreachAccountConfig {
         .filter(
           (entry): entry is OutreachAccountConfig["social"]["tapInAssignments"][number] =>
             Boolean(entry.brandId) &&
-            (entry.role === "opening" || entry.role === "reply") &&
+            (entry.role === "opening" || entry.role === "reply" || entry.role === "both") &&
             !Number.isNaN(Date.parse(entry.updatedAt))
         )
         .slice(0, 50),

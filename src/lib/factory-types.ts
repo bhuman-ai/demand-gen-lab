@@ -848,7 +848,7 @@ export type SocialActorRole =
 
 export type TapInAccountAssignment = {
   brandId: string;
-  role: "opening" | "reply";
+  role: "opening" | "reply" | "both";
   updatedAt: string;
 };
 

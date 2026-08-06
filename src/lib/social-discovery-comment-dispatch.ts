@@ -29,6 +29,7 @@ import {
   normalizeSocialDiscoveryYouTubePolicy,
 } from "@/lib/social-discovery-youtube-policy";
 import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
+import { selectBalancedAccountPair } from "@/lib/social-discovery-account-rotation";
 
 type AutoCommentDispatchOptions = {
   enabled?: boolean;
@@ -46,8 +47,8 @@ type AutoCommentDispatchOptions = {
   minRelevanceScore?: number;
   minRisingScore?: number;
   accountRoles?: {
-    openingAccountId: string;
-    replyAccountId: string;
+    openingAccountIds: string[];
+    replyAccountIds: string[];
   };
 };
 
@@ -302,19 +303,18 @@ function chooseAccounts(input: {
   accountRoles?: AutoCommentDispatchOptions["accountRoles"];
 }) {
   if (input.accountRoles) {
-    const byId = new Map(input.accounts.map((account) => [account.id, account]));
-    const primary = byId.get(input.accountRoles.openingAccountId) ?? null;
-    const reply = byId.get(input.accountRoles.replyAccountId) ?? null;
-    if (!primary || !reply || primary.id === reply.id) {
-      return { primary: null, reply: null, reason: "assigned_accounts_unavailable" };
-    }
-    if (
-      (input.recentAccountCounts.get(primary.id) ?? 0) >= input.perAccountHourlyCap ||
-      (input.recentAccountCounts.get(reply.id) ?? 0) >= input.perAccountHourlyCap
-    ) {
-      return { primary: null, reply: null, reason: "assigned_account_cap_reached" };
-    }
-    return { primary, reply, reason: "" };
+    const details = asRecord(dispatchMeta(input.post).details);
+    return selectBalancedAccountPair({
+      postId: input.post.id,
+      accounts: input.accounts,
+      roles: input.accountRoles,
+      recentAccountCounts: input.recentAccountCounts,
+      perAccountHourlyCap: input.perAccountHourlyCap,
+      pinned: {
+        openingAccountId: String(details.accountId ?? "").trim(),
+        replyAccountId: String(details.replyAccountId ?? "").trim(),
+      },
+    });
   }
   const recommended = recommendedAccountIds(input.post);
   const byId = new Map(input.accounts.map((account) => [account.id, account]));
@@ -624,7 +624,12 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
         const brandName = commentBrandName(campaignBrand.name);
         const problem = draftProblem(postToSend, brandName, Boolean(reply));
         if (problem) {
-          await markDispatchAttempt({ post: postToSend, status: "failed", reason: problem });
+          await markDispatchAttempt({
+            post: postToSend,
+            status: "failed",
+            reason: problem,
+            details: { accountId: primary.id, replyAccountId: reply?.id ?? "" },
+          });
           brandResult.failed += 1;
           result.failed += 1;
           brandResult.details.push({ postId: postToSend.id, failed: true, reason: problem });
@@ -693,7 +698,11 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
           post: candidate,
           status: "failed",
           reason: message,
-          details: error instanceof SocialCommentDeliveryError ? error.details : {},
+          details: {
+            ...(error instanceof SocialCommentDeliveryError ? error.details : {}),
+            accountId: primary.id,
+            replyAccountId: reply?.id ?? "",
+          },
         });
         brandResult.failed += 1;
         result.failed += 1;

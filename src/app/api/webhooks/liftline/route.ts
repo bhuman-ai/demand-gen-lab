@@ -139,6 +139,9 @@ export async function POST(request: Request) {
     try {
       await saveTapInYouTubeRoles({
         workspace,
+        accountIds: strings(youtubeRoles.accountIds, 50),
+        openingAccountIds: strings(youtubeRoles.openingAccountIds, 50),
+        replyAccountIds: strings(youtubeRoles.replyAccountIds, 50),
         openingAccountId: String(youtubeRoles.openingAccountId ?? "").trim(),
         replyAccountId: String(youtubeRoles.replyAccountId ?? "").trim(),
       });

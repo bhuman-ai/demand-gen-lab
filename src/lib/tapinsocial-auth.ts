@@ -188,18 +188,38 @@ function isUsableTapInYouTubeAccount(account: Awaited<ReturnType<typeof getOutre
 
 export async function saveTapInYouTubeRoles(input: {
   workspace: TapInAuthWorkspace;
-  openingAccountId: string;
-  replyAccountId: string;
+  accountIds?: string[];
+  openingAccountIds?: string[];
+  replyAccountIds?: string[];
+  openingAccountId?: string;
+  replyAccountId?: string;
 }) {
-  const openingAccountId = input.openingAccountId.trim();
-  const replyAccountId = input.replyAccountId.trim();
-  if (!openingAccountId || !replyAccountId || openingAccountId === replyAccountId) {
-    throw new Error("Choose two different connected YouTube channels.");
+  const uniqueIds = (values: Array<string | undefined>) =>
+    Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean)));
+  const legacyOpeningAccountId = String(input.openingAccountId ?? "").trim();
+  const legacyReplyAccountId = String(input.replyAccountId ?? "").trim();
+  const requestedAccountIds = uniqueIds([
+    ...(input.accountIds ?? []),
+    legacyOpeningAccountId,
+    legacyReplyAccountId,
+  ]);
+  const accountIds = requestedAccountIds.length
+    ? requestedAccountIds
+    : uniqueIds([...(input.openingAccountIds ?? []), ...(input.replyAccountIds ?? [])]);
+  const openingAccountIds = uniqueIds(
+    input.openingAccountIds?.length ? input.openingAccountIds : [legacyOpeningAccountId]
+  ).filter((accountId) => accountIds.includes(accountId));
+  const replyAccountIds = uniqueIds(
+    input.replyAccountIds?.length ? input.replyAccountIds : [legacyReplyAccountId]
+  ).filter((accountId) => accountIds.includes(accountId));
+  const hasDistinctPair = openingAccountIds.some((openingId) =>
+    replyAccountIds.some((replyId) => replyId !== openingId)
+  );
+
+  if (accountIds.length < 2 || !openingAccountIds.length || !replyAccountIds.length || !hasDistinctPair) {
+    throw new Error("Choose at least two connected YouTube channels with different opening and reply options.");
   }
-  if (
-    !workspaceOwnsYouTubeAccount(input.workspace, openingAccountId) ||
-    !workspaceOwnsYouTubeAccount(input.workspace, replyAccountId)
-  ) {
+  if (accountIds.some((accountId) => !workspaceOwnsYouTubeAccount(input.workspace, accountId))) {
     throw new Error("The selected YouTube channels do not belong to this TapIn workspace.");
   }
 
@@ -209,10 +229,9 @@ export async function saveTapInYouTubeRoles(input: {
   const accounts = await Promise.all(
     workspaceAccountIds.map((accountId) => getOutreachAccount(accountId))
   );
-  const opening = accounts.find((account) => account?.id === openingAccountId) ?? null;
-  const reply = accounts.find((account) => account?.id === replyAccountId) ?? null;
-  if (!isUsableTapInYouTubeAccount(opening) || !isUsableTapInYouTubeAccount(reply)) {
-    throw new Error("Both selected YouTube channels must still be connected.");
+  const selectedAccounts = accounts.filter((account) => account && accountIds.includes(account.id));
+  if (selectedAccounts.length !== accountIds.length || selectedAccounts.some((account) => !isUsableTapInYouTubeAccount(account))) {
+    throw new Error("Every selected YouTube channel must still be connected.");
   }
 
   const updatedAt = new Date().toISOString();
@@ -220,12 +239,9 @@ export async function saveTapInYouTubeRoles(input: {
     const existing = account!.config.social.tapInAssignments.filter(
       (assignment) => assignment.brandId !== input.workspace.brandId
     );
-    const role =
-      account!.id === openingAccountId
-        ? "opening"
-        : account!.id === replyAccountId
-          ? "reply"
-          : "";
+    const canOpen = openingAccountIds.includes(account!.id);
+    const canReply = replyAccountIds.includes(account!.id);
+    const role = canOpen && canReply ? "both" : canOpen ? "opening" : canReply ? "reply" : "";
     const tapInAssignments = role
       ? [...existing, { brandId: input.workspace.brandId, role, updatedAt }]
       : existing;
@@ -236,7 +252,7 @@ export async function saveTapInYouTubeRoles(input: {
     return updated;
   });
   await Promise.all(updates);
-  return { openingAccountId, replyAccountId };
+  return { accountIds, openingAccountIds, replyAccountIds };
 }
 
 export async function createTapInYouTubeConnectAccount(userId: string) {

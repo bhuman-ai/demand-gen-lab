@@ -44,21 +44,23 @@ export async function resolveTapInAccountRoles(brandId: string) {
       .filter((assignment) => assignment.brandId === brandId)
       .map((assignment) => ({ accountId: account.id, role: assignment.role }))
   );
-  const openingAccountId =
-    assigned.find((assignment) => assignment.role === "opening")?.accountId ??
-    String(process.env.TAPIN_SOCIAL_OPENING_ACCOUNT_ID ?? "").trim();
-  const replyAccountId =
-    assigned.find((assignment) => assignment.role === "reply")?.accountId ??
-    String(process.env.TAPIN_SOCIAL_REPLY_ACCOUNT_ID ?? "").trim();
+  const assignedOpeningIds = assigned
+    .filter((assignment) => assignment.role === "opening" || assignment.role === "both")
+    .map((assignment) => assignment.accountId);
+  const assignedReplyIds = assigned
+    .filter((assignment) => assignment.role === "reply" || assignment.role === "both")
+    .map((assignment) => assignment.accountId);
+  const openingAccountIds = assignedOpeningIds.length
+    ? assignedOpeningIds
+    : [String(process.env.TAPIN_SOCIAL_OPENING_ACCOUNT_ID ?? "").trim()].filter(Boolean);
+  const replyAccountIds = assignedReplyIds.length
+    ? assignedReplyIds
+    : [String(process.env.TAPIN_SOCIAL_REPLY_ACCOUNT_ID ?? "").trim()].filter(Boolean);
   const accountIds = new Set(accounts.map((account) => account.id));
-  const ready = Boolean(
-    openingAccountId &&
-      replyAccountId &&
-      openingAccountId !== replyAccountId &&
-      accountIds.has(openingAccountId) &&
-      accountIds.has(replyAccountId)
-  );
-  return { ready, openingAccountId, replyAccountId };
+  const usableOpeningIds = Array.from(new Set(openingAccountIds.filter((accountId) => accountIds.has(accountId))));
+  const usableReplyIds = Array.from(new Set(replyAccountIds.filter((accountId) => accountIds.has(accountId))));
+  const ready = usableOpeningIds.some((openingId) => usableReplyIds.some((replyId) => replyId !== openingId));
+  return { ready, openingAccountIds: usableOpeningIds, replyAccountIds: usableReplyIds };
 }
 
 export async function getTapInRunnerBrandState(brandId: string) {
@@ -66,8 +68,8 @@ export async function getTapInRunnerBrandState(brandId: string) {
   const allowed = config.brandIds.includes(brandId);
   const roles = allowed ? await resolveTapInAccountRoles(brandId) : {
     ready: false,
-    openingAccountId: "",
-    replyAccountId: "",
+    openingAccountIds: [],
+    replyAccountIds: [],
   };
   return {
     enabled: config.enabled,
@@ -123,8 +125,8 @@ export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
       perRunCap: envNumber("TAPIN_SOCIAL_PER_RUN_CAP", 1, 1, 5),
       perAccountHourlyCap: envNumber("TAPIN_SOCIAL_PER_ACCOUNT_HOURLY_CAP", 1, 1, 10),
       accountRoles: {
-        openingAccountId: roles.openingAccountId,
-        replyAccountId: roles.replyAccountId,
+        openingAccountIds: roles.openingAccountIds,
+        replyAccountIds: roles.replyAccountIds,
       },
     });
     brands.push({ brandId, skipped: false, dispatch });

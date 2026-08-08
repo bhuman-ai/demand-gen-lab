@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
+import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
+import {
+  DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
+  normalizeSocialDiscoveryYouTubePolicy,
+} from "@/lib/social-discovery-youtube-policy";
 import { generateTapInThreadPreview } from "@/lib/tapinsocial-preview";
 import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
 
@@ -25,6 +30,15 @@ function requiredText(value: unknown, maxLength: number) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
 
+function strings(value: unknown, limit = 12) {
+  const values = Array.isArray(value)
+    ? value
+    : String(value ?? "").split(/[,\n]/);
+  return Array.from(
+    new Set(values.map((entry) => requiredText(entry, 160)).filter(Boolean))
+  ).slice(0, limit);
+}
+
 export async function POST(request: Request) {
   const expected = expectedSecret();
   if (!expected || suppliedSecret(request) !== expected) {
@@ -37,11 +51,12 @@ export async function POST(request: Request) {
   const campaignType = body.campaignType === "comment" ? "comment" : "thread";
   const openingPrompt = requiredText(body.openingPrompt, 2000);
   const replyPrompt = requiredText(body.replyPrompt, 2000);
+  const targets = strings(body.targets);
   const videoTitle = requiredText(body.videoTitle, 400);
   const videoDescription = requiredText(body.videoDescription, 4000);
-  if (!userId || !brandId || !openingPrompt || (campaignType === "thread" && !replyPrompt) || !videoTitle || !videoDescription) {
+  if (!userId || !brandId || !openingPrompt || (campaignType === "thread" && !replyPrompt) || ((!videoTitle || !videoDescription) && !targets.length)) {
     return NextResponse.json(
-      { error: campaignType === "thread" ? "Opening prompt, reply prompt, and video context are required." : "Opening prompt and video context are required." },
+      { error: campaignType === "thread" ? "Opening prompt, reply prompt, and campaign targeting are required." : "Opening prompt and campaign targeting are required." },
       { status: 400 }
     );
   }
@@ -60,15 +75,53 @@ export async function POST(request: Request) {
   }
 
   try {
+    let video = {
+      title: videoTitle,
+      description: videoDescription,
+      url: requiredText(body.videoUrl, 1000),
+      matchedTarget: "",
+    };
+
+    if (!video.title || !video.description) {
+      const youtubeDiscoveryPolicy = normalizeSocialDiscoveryYouTubePolicy(
+        body.youtubeDiscoveryPolicy,
+        DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
+      ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
+      const discovery = await discoverYouTubeSearchPostsForBrand({
+        brand,
+        queries: targets.slice(0, 4),
+        maxResults: 8,
+        preferApiKey: true,
+        policy: youtubeDiscoveryPolicy,
+      });
+      const matchedVideo = discovery.posts[0];
+      if (!matchedVideo) {
+        return NextResponse.json(
+          {
+            error: "No YouTube videos matched this campaign’s targeting and video rules. Try broader targets or loosen the filters.",
+          },
+          { status: 422 }
+        );
+      }
+      video = {
+        title: requiredText(matchedVideo.title, 400),
+        description:
+          requiredText(matchedVideo.body, 4000) ||
+          `YouTube video matched the campaign target “${requiredText(matchedVideo.query, 160)}”.`,
+        url: requiredText(matchedVideo.url, 1000),
+        matchedTarget: requiredText(matchedVideo.query, 160),
+      };
+    }
+
     const preview = await generateTapInThreadPreview({
       campaignType,
       brandName: brand.name,
       openingPrompt,
       replyPrompt,
-      videoTitle,
-      videoDescription,
+      videoTitle: video.title,
+      videoDescription: video.description,
     });
-    return NextResponse.json({ ok: true, preview });
+    return NextResponse.json({ ok: true, preview, video });
   } catch {
     return NextResponse.json(
       { error: "Preview generation is unavailable right now. Try again." },

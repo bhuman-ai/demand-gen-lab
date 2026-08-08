@@ -6,7 +6,9 @@ import { normalizeGmailUiLoginStatus } from "@/lib/gmail-ui-login";
 import { buildGmailUiUserDataDir } from "@/lib/gmail-ui-profile";
 import {
   createOutreachAccount,
+  getOutreachAccountSecrets,
   listOutreachAccounts,
+  type OutreachAccountSecrets,
   updateOutreachAccount,
 } from "@/lib/outreach-data";
 import { getOutreachAccountFromEmail } from "@/lib/outreach-account-helpers";
@@ -38,17 +40,68 @@ function gmailUiProfileDir(fromEmail: string) {
   return buildGmailUiUserDataDir(root, fromEmail);
 }
 
+function mailboxHasSmtpCredentials(
+  mailbox: MailpoolMailbox,
+  existingConfig?: OutreachAccountConfig | null,
+  existingSecrets?: OutreachAccountSecrets | null
+) {
+  const smtpHost =
+    String(mailbox.smtpHost ?? "").trim() || String(existingConfig?.mailbox.smtpHost ?? "").trim();
+  const smtpUsername =
+    String(mailbox.smtpUsername ?? "").trim() ||
+    String(existingConfig?.mailbox.smtpUsername ?? "").trim();
+  const imapHost =
+    String(mailbox.imapHost ?? "").trim() || String(existingConfig?.mailbox.host ?? "").trim();
+  const mailboxActive =
+    String(mailbox.status ?? "").trim().toLowerCase() === "active" ||
+    existingConfig?.mailpool.status === "active";
+  return Boolean(
+    smtpHost &&
+      smtpUsername &&
+      imapHost &&
+      mailboxActive &&
+      (String(mailbox.smtpPassword ?? "").trim() ||
+        String(mailbox.password ?? "").trim() ||
+        String(existingSecrets?.mailboxSmtpPassword ?? "").trim() ||
+        String(existingSecrets?.mailboxPassword ?? "").trim() ||
+        existingConfig?.mailbox.deliveryMethod === "smtp")
+  );
+}
+
 function mailboxConfigFromMailpool(
   mailbox: MailpoolMailbox,
-  existingConfig?: OutreachAccountConfig | null
+  existingConfig?: OutreachAccountConfig | null,
+  existingSecrets?: OutreachAccountSecrets | null
 ): OutreachAccountConfig {
   const fromEmail = mailbox.email.trim().toLowerCase();
-  const usesGmailUi = wantsWebshareProxy();
+  const imapHost =
+    String(mailbox.imapHost ?? "").trim() || String(existingConfig?.mailbox.host ?? "").trim();
+  const smtpHost =
+    String(mailbox.smtpHost ?? "").trim() || String(existingConfig?.mailbox.smtpHost ?? "").trim();
+  const smtpUsername =
+    String(mailbox.smtpUsername ?? "").trim() ||
+    String(existingConfig?.mailbox.smtpUsername ?? "").trim() ||
+    fromEmail;
+  const wantsGmailUi = wantsWebshareProxy();
+  const existingGmailUiStatus = normalizeGmailUiLoginStatus({
+    deliveryMethod: "gmail_ui",
+    state: existingConfig?.mailbox.gmailUiLoginState,
+    checkedAt: existingConfig?.mailbox.gmailUiLoginCheckedAt,
+    message: existingConfig?.mailbox.gmailUiLoginMessage,
+    forceLoginRequired: !String(existingConfig?.mailbox.gmailUiUserDataDir ?? "").trim(),
+  });
+  const useSmtpFallback = Boolean(
+    mailboxHasSmtpCredentials(mailbox, existingConfig, existingSecrets) &&
+      (existingConfig?.mailbox.deliveryMethod === "smtp" || existingGmailUiStatus.gmailUiLoginState !== "ready")
+  );
+  const usesGmailUi = wantsGmailUi && !useSmtpFallback;
   const loginStatus = normalizeGmailUiLoginStatus({
     deliveryMethod: usesGmailUi ? "gmail_ui" : "smtp",
     state: existingConfig?.mailbox.gmailUiLoginState,
     checkedAt: existingConfig?.mailbox.gmailUiLoginCheckedAt,
-    message: existingConfig?.mailbox.gmailUiLoginMessage,
+    message: useSmtpFallback
+      ? "Mailpool SMTP is available, so webhook sync kept delivery off Gmail UI."
+      : existingConfig?.mailbox.gmailUiLoginMessage,
     forceLoginRequired: usesGmailUi && !String(existingConfig?.mailbox.gmailUiUserDataDir ?? "").trim(),
   });
   return {
@@ -79,14 +132,20 @@ function mailboxConfigFromMailpool(
       provider: usesGmailUi ? "gmail" : "imap",
       deliveryMethod: usesGmailUi ? "gmail_ui" : "smtp",
       email: fromEmail,
-      status: mailbox.imapHost ? "connected" : "disconnected",
-      host: String(mailbox.imapHost ?? "").trim(),
-      port: Number(mailbox.imapPort ?? 993) || 993,
-      secure: Boolean(mailbox.imapTLS ?? true),
-      smtpHost: String(mailbox.smtpHost ?? "").trim(),
-      smtpPort: Number(mailbox.smtpPort ?? 587) || 587,
-      smtpSecure: Boolean(mailbox.smtpTLS ?? false),
-      smtpUsername: String(mailbox.smtpUsername ?? "").trim() || fromEmail,
+      status: imapHost ? "connected" : "disconnected",
+      host: imapHost,
+      port: Number(mailbox.imapPort ?? existingConfig?.mailbox.port ?? 993) || 993,
+      secure:
+        typeof mailbox.imapTLS === "boolean"
+          ? mailbox.imapTLS
+          : Boolean(existingConfig?.mailbox.secure ?? true),
+      smtpHost,
+      smtpPort: Number(mailbox.smtpPort ?? existingConfig?.mailbox.smtpPort ?? 587) || 587,
+      smtpSecure:
+        typeof mailbox.smtpTLS === "boolean"
+          ? mailbox.smtpTLS
+          : Boolean(existingConfig?.mailbox.smtpSecure ?? false),
+      smtpUsername,
       gmailUiUserDataDir: gmailUiProfileDir(fromEmail),
       gmailUiProfileDirectory: "",
       gmailUiBrowserChannel: "chrome",
@@ -108,7 +167,8 @@ async function reconcileMailbox(mailbox: MailpoolMailbox, deleted = false) {
     accounts.find((account) => account.config.mailpool.mailboxId === mailbox.id) ??
     accounts.find((account) => getOutreachAccountFromEmail(account).trim().toLowerCase() === mailbox.email.trim().toLowerCase()) ??
     null;
-  const nextConfig = mailboxConfigFromMailpool(mailbox, existing?.config);
+  const existingSecrets = existing ? await getOutreachAccountSecrets(existing.id) : null;
+  const nextConfig = mailboxConfigFromMailpool(mailbox, existing?.config, existingSecrets);
   const usesGmailUi = nextConfig.mailbox.deliveryMethod === "gmail_ui";
 
   const patch = {

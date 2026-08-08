@@ -44,6 +44,32 @@ export type ApifyLead = {
   emailVerification?: EmailVerificationState | null;
 };
 
+export type AirscalePeopleSearchInput = {
+  keywords?: string[];
+  jobTitles?: string[];
+  companyDomains?: string[];
+  companyLinkedinUrls?: string[];
+  locations?: string[];
+  excludeKeywords?: string[];
+  excludeJobTitles?: string[];
+  excludeCompanyDomains?: string[];
+  size?: number;
+  cursor?: string;
+  timeoutMs?: number;
+};
+
+export type AirscalePeopleSearchResult = {
+  ok: boolean;
+  provider: "airscale";
+  leads: ApifyLead[];
+  total: number;
+  nextCursor: string;
+  rawCount: number;
+  httpStatus: number | null;
+  query: Record<string, unknown>;
+  error: string;
+};
+
 export type ApifyStoreActor = {
   actorId: string;
   title: string;
@@ -755,6 +781,199 @@ function cleanEnvValue(value: unknown) {
   return String(value ?? "")
     .replace(/\\r|\\n/g, "")
     .trim();
+}
+
+function airscaleLeadSourcingApiKey() {
+  return cleanEnvValue(
+    process.env.AIRSCALE_API_KEY ??
+      process.env.AIRSCALE_LEAD_SOURCE_API_KEY ??
+      process.env.EMAIL_FINDER_AIRSCALE_API_KEY
+  );
+}
+
+function airscaleLeadSourcingBaseUrl() {
+  return (
+    cleanEnvValue(
+      process.env.AIRSCALE_API_BASE_URL ??
+        process.env.AIRSCALE_LEAD_SOURCE_BASE_URL ??
+        process.env.EMAIL_FINDER_AIRSCALE_BASE_URL
+    ) || "https://api.airscale.io"
+  ).replace(/\/+$/, "");
+}
+
+export function hasAirscalePeopleSourcingConfig() {
+  return Boolean(airscaleLeadSourcingApiKey());
+}
+
+function normalizeFilterValues(values: unknown, limit = 200) {
+  const source = Array.isArray(values)
+    ? values
+    : String(values ?? "")
+        .split(/[\n,]/g)
+        .map((value) => value.trim());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of source) {
+    const normalized = compactText(value, 160);
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function addAirscaleFilter(
+  query: Record<string, unknown>,
+  key: string,
+  include: unknown,
+  exclude?: unknown
+) {
+  const includeValues = normalizeFilterValues(include);
+  const excludeValues = normalizeFilterValues(exclude);
+  if (!includeValues.length && !excludeValues.length) return;
+  query[key] = {
+    ...(includeValues.length ? { include: includeValues } : {}),
+    ...(excludeValues.length ? { exclude: excludeValues } : {}),
+  };
+}
+
+function hostnameFromUrlOrDomain(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return safeHostname(raw.includes("://") ? raw : `https://${raw}`);
+}
+
+function airscaleLeadName(row: Record<string, unknown>) {
+  const first = String(row.firstname ?? row.firstName ?? row.first_name ?? "").trim();
+  const last = String(row.lastname ?? row.lastName ?? row.last_name ?? "").trim();
+  const full = String(row.name ?? row.fullName ?? row.full_name ?? "").trim();
+  return full || `${first} ${last}`.replace(/\s+/g, " ").trim();
+}
+
+function normalizeAirscaleLead(raw: unknown): ApifyLead | null {
+  const row = coerceRecord(raw);
+  const name = airscaleLeadName(row);
+  const title = String(row.jobTitle ?? row.JobTitle ?? row.title ?? row.headline ?? "").trim();
+  const company = String(row.companyName ?? row.company ?? row.organization ?? "").trim();
+  const sourceUrl = String(row.profileUrl ?? row.linkedinUrl ?? row.linkedin_url ?? row.url ?? "").trim();
+  const companyWebsite = String(
+    row.companyWebsite ?? row.companyDomain ?? row.domain ?? row.website ?? ""
+  ).trim();
+  const domain = toRegistrableDomain(hostnameFromUrlOrDomain(companyWebsite));
+  const email = extractFirstEmailAddress(
+    row.email ?? row.workEmail ?? row.work_email ?? row.professionalEmail ?? row.professional_email
+  );
+  if (!name && !company && !domain && !email) return null;
+  return {
+    email,
+    name,
+    company: company || inferCompanyFromDomain(domain),
+    title,
+    domain,
+    sourceUrl: sourceUrl || (domain ? `https://${domain}` : ""),
+  };
+}
+
+export async function sourceLeadsFromAirscalePeopleSearch(
+  input: AirscalePeopleSearchInput
+): Promise<AirscalePeopleSearchResult> {
+  const key = airscaleLeadSourcingApiKey();
+  const query: Record<string, unknown> = {};
+  addAirscaleFilter(query, "keyword", input.keywords, input.excludeKeywords);
+  addAirscaleFilter(query, "JobTitle", input.jobTitles, input.excludeJobTitles);
+  addAirscaleFilter(query, "companyDomain", input.companyDomains, input.excludeCompanyDomains);
+  addAirscaleFilter(query, "companyLinkedinUrl", input.companyLinkedinUrls);
+  addAirscaleFilter(query, "location", input.locations);
+
+  if (!key) {
+    return {
+      ok: false,
+      provider: "airscale",
+      leads: [],
+      total: 0,
+      nextCursor: "",
+      rawCount: 0,
+      httpStatus: null,
+      query,
+      error: "AIRSCALE_API_KEY is not configured.",
+    };
+  }
+  if (!Object.keys(query).length) {
+    return {
+      ok: false,
+      provider: "airscale",
+      leads: [],
+      total: 0,
+      nextCursor: "",
+      rawCount: 0,
+      httpStatus: null,
+      query,
+      error: "Airscale people search needs at least one filter.",
+    };
+  }
+
+  const size = Math.max(1, Math.min(100, Math.trunc(Number(input.size ?? 25) || 25)));
+  try {
+    const response = await fetch(`${airscaleLeadSourcingBaseUrl()}/v1/find-people`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(Math.max(2_000, Math.trunc(Number(input.timeoutMs ?? 20_000) || 20_000))),
+      body: JSON.stringify({
+        query,
+        size,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
+      }),
+    });
+    const rawText = await response.text();
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = rawText ? coerceRecord(JSON.parse(rawText)) : {};
+    } catch {
+      payload = { raw: rawText.slice(0, 500) };
+    }
+    const root = coerceRecord(payload.response ?? payload);
+    const rawLeads = Array.isArray(root.leads) ? root.leads : [];
+    const leads: ApifyLead[] = [];
+    const seen = new Set<string>();
+    for (const row of rawLeads) {
+      const lead = normalizeAirscaleLead(row);
+      if (!lead) continue;
+      const dedupeKey =
+        lead.email || `${lead.name.toLowerCase()}|${lead.domain}|${lead.sourceUrl.toLowerCase()}`;
+      if (!dedupeKey || seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      leads.push(lead);
+    }
+    const error = String(root.error ?? root.message ?? "").trim();
+    return {
+      ok: response.ok,
+      provider: "airscale",
+      leads,
+      total: Math.max(0, Number(root.total ?? leads.length) || 0),
+      nextCursor: String(root.next_cursor ?? root.nextCursor ?? "").trim(),
+      rawCount: rawLeads.length,
+      httpStatus: response.status,
+      query,
+      error: response.ok ? "" : error || `Airscale people search failed with HTTP ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      provider: "airscale",
+      leads: [],
+      total: 0,
+      nextCursor: "",
+      rawCount: 0,
+      httpStatus: null,
+      query,
+      error: error instanceof Error ? error.message : "Airscale people search failed.",
+    };
+  }
 }
 
 function parseEnvBool(value: unknown, fallback: boolean) {
@@ -2516,7 +2735,7 @@ export function evaluateLeadAgainstQualityPolicy(input: {
     input.policy.allowRoleInboxes === true &&
     hasSourceUrl &&
     sourceDomainMatchesLead &&
-    hasIndependentPersonEvidence
+    (hasIndependentPersonEvidence || isLikelyRoleInbox(local))
   ) {
     return {
       email,
@@ -2528,6 +2747,7 @@ export function evaluateLeadAgainstQualityPolicy(input: {
         emailVerification,
         policyBypass: "first_party_warmup_public_email",
         sourceDomain,
+        roleInbox: isLikelyRoleInbox(local),
       },
     };
   }

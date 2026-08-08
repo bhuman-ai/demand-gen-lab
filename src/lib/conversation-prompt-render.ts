@@ -352,7 +352,7 @@ function buildPrompt(input: {
     "- Subject must state the concrete topic of the email, not a generic opener.",
     "- Never use subject patterns like 'Quick question', 'Quick question for...', 'Question for...', 'Checking in', or 'Following up'.",
     "- Never use the word 'question' or 'questions' in the subject. Use 'inquiry', 'advice', 'fit', 'setup', or the concrete topic instead.",
-    "- Prefer content-specific inquiry subjects like 'studio furniture purchase inquiry', 'low-volume inbox warmup advice', or 'AWS credits eligibility'.",
+    "- Prefer a short content-specific subject based on the actual reason for the email, such as a concrete pricing, setup, partnership, availability, or product-fit phrase.",
     "- No buzzwords, no placeholder tokens, no unresolved variables.",
     "- Treat node prompt template as direction only. Do not copy any example text verbatim.",
     replyContext

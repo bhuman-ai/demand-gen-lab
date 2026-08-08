@@ -40,6 +40,30 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
   },
   {
+    name: "lastb2b.brand.investigate",
+    operatorToolName: "investigate_brand_data",
+    title: "Investigate brand workspace",
+    description:
+      "Read raw brand workspace evidence across campaigns, prep tasks, runs, events, messages, leads, replies, experiments, and sender context when the compact snapshot is not enough.",
+    provider: "lastb2b",
+    category: "analytics",
+    capability: "inspect_state",
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        query: stringProp("Investigation question"),
+        threadId: stringProp("Optional reply thread id"),
+        runId: stringProp("Optional outreach run id"),
+        leadId: stringProp("Optional lead id"),
+        campaignId: stringProp("Optional campaign id"),
+        maxThreads: numberProp("Maximum reply threads to include"),
+        maxMessages: numberProp("Maximum messages or leads to include per section"),
+        maxRuns: numberProp("Maximum runs to include"),
+      },
+      ["brandId"]
+    ),
+  },
+  {
     name: "lastb2b.sender.snapshot",
     operatorToolName: "get_sender_snapshot",
     title: "Inspect sender state",
@@ -48,6 +72,109 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     category: "sender_infra",
     capability: "inspect_state",
     inputSchema: objectSchema({ accountId: stringProp("Sender account id") }, ["accountId"]),
+  },
+  {
+    name: "sender.warmup.snapshot",
+    operatorToolName: "get_warmup_intelligence_snapshot",
+    title: "Inspect warmup intelligence",
+    description:
+      "Read the warmup operating guide and sender evidence so the agent can decide legitimate reply-acquisition, inbox-trust, exact-copy probe, recovery, or tiny outreach moves.",
+    provider: "lastb2b",
+    category: "deliverability",
+    capability: "inspect_state",
+    inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
+  },
+  {
+    name: "warmup.agent.plan",
+    operatorToolName: "plan_warmup_agent_work",
+    title: "Plan agent-conducted warmup",
+    description:
+      "Build a warmup workbench for the agent: brand context, sender posture, warmup campaigns, recent replies, and the enqueue contract. The agent still chooses real recipients and writes exact messages.",
+    provider: "lastb2b",
+    category: "deliverability",
+    capability: "inspect_state",
+    inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
+  },
+  {
+    name: "warmup.agent.enqueue_messages",
+    operatorToolName: "enqueue_warmup_agent_messages",
+    title: "Enqueue agent-authored warmup messages",
+    description:
+      "Schedule exact reply-acquisition warmup emails already chosen and written by the agent. This only performs audited send plumbing: run, leads, messages, dispatch job, reply sync job, and evidence events.",
+    provider: "lastb2b",
+    category: "channel",
+    capability: "launch_campaign",
+    risk: { reputationRisk: true },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        campaignId: stringProp("Optional default warmup campaign id"),
+        senderAccountId: stringProp("Optional default sender account id"),
+        targetMessages: objectArrayProp(
+          "Agent-selected targets. Each must include recipientEmail, subject, and body. Optional: campaignId, senderAccountId, recipientName, recipientCompany, recipientTitle, sourceUrl, reason."
+        ),
+        startAt: stringProp("Optional ISO start time"),
+        minSpacingMinutes: numberProp("Spacing between messages"),
+        dailyCap: numberProp("Daily cap for created runs, capped by the tool"),
+        hourlyCap: numberProp("Hourly cap for created runs, capped by the tool"),
+      },
+      ["brandId", "targetMessages"]
+    ),
+  },
+  {
+    name: "deliverability.probe.start",
+    operatorToolName: "start_deliverability_probe",
+    title: "Start exact-copy deliverability probe",
+    description:
+      "Start an inbox-placement probe from an existing run that already contains real scheduled/sent copy. Use after agent-authored warmup or real campaign copy exists.",
+    provider: "lastb2b",
+    category: "deliverability",
+    capability: "test_inbox_placement",
+    risk: { reputationRisk: true },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        campaignId: stringProp("Optional campaign id"),
+        runId: stringProp("Optional run id"),
+        senderAccountId: stringProp("Optional sender account id"),
+        probeAllSenders: { type: "boolean", description: "Probe every available sender transport when true." },
+        action: enumProp(
+          ["probe_deliverability", "probe_all_senders_deliverability"],
+          "Optional explicit probe action"
+        ),
+        reason: stringProp("Reason for starting the probe"),
+      },
+      ["brandId"]
+    ),
+  },
+  {
+    name: "airscale.people.source",
+    operatorToolName: "source_airscale_people",
+    title: "Source people with Airscale",
+    description:
+      "Search Airscale Find People with agent-chosen filters and optionally import returned people into a campaign's lead inventory. Useful when warmup or outbound inventory needs a different sourcing route.",
+    provider: "airscale",
+    category: "lead_source",
+    capability: "find_leads",
+    risk: { spendRisk: true },
+    inputSchema: objectSchema(
+      {
+        brandId: stringProp("Brand id"),
+        campaignId: stringProp("Optional campaign id to import into"),
+        keywords: arrayProp("Profile keywords or ICP terms for Airscale keyword search"),
+        jobTitles: arrayProp("Current job titles to include"),
+        companyDomains: arrayProp("Company domains to include"),
+        companyLinkedinUrls: arrayProp("Company LinkedIn URLs to include"),
+        locations: arrayProp("Cities, regions, or countries to include"),
+        excludeKeywords: arrayProp("Profile keywords to exclude"),
+        excludeJobTitles: arrayProp("Job titles to exclude"),
+        excludeCompanyDomains: arrayProp("Company domains to exclude"),
+        maxResults: numberProp("Maximum Airscale people to return, capped at 100"),
+        importToCampaign: { type: "boolean", description: "When campaignId is set, import results into that campaign. Defaults true." },
+        cursor: stringProp("Optional Airscale pagination cursor"),
+      },
+      ["brandId"]
+    ),
   },
   {
     name: "gmail_ui.account.observe",
@@ -201,6 +328,17 @@ const OPERATOR_TOOL_DEFINITIONS: OperatorGrowthToolDefinition[] = [
     provider: "lastb2b",
     category: "analytics",
     capability: "inspect_state",
+    inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
+  },
+  {
+    name: "reply.check",
+    operatorToolName: "summarize_inbox",
+    title: "Check replies",
+    description:
+      "Read reply threads and reply quality after warmup or outreach work, so the agent can decide whether replies improved, stalled, or need a different approach.",
+    provider: "lastb2b",
+    category: "analytics",
+    capability: "sync_results",
     inputSchema: objectSchema({ brandId: stringProp("Brand id") }, ["brandId"]),
   },
   {
@@ -584,6 +722,10 @@ function arrayProp(description: string) {
 
 function objectProp(description: string) {
   return { type: "object", description, additionalProperties: true };
+}
+
+function objectArrayProp(description: string) {
+  return { type: "array", description, items: { type: "object", additionalProperties: true } };
 }
 
 function enumProp(values: string[], description: string) {

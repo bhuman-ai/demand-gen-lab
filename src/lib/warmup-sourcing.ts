@@ -1,29 +1,11 @@
 import type { BrandRecord } from "@/lib/factory-types";
 
 type WarmupTopicLane = {
-  id:
-    | "art_commissions"
-    | "custom_framers"
-    | "interior_design"
-    | "studio_furniture"
-    | "bootstrapped_founders"
-    | "b2b_saas_companies"
-    | "indie_software_companies"
-    | "startup_cloud_credits"
-    | "qa_testing"
-    | "personalized_video"
-    | "local_hospitality"
-    | "agency_growth"
-    | "paid_social"
-    | "retention"
-    | "outbound"
-    | "revops"
-    | "automation"
-    | "prospect_data"
-    | "finance_ops";
+  id: string;
+  label: string;
   keywords: string[];
   copyTerm: string;
-  discoveryQuery: string;
+  discoveryPromptTemplate: string;
 };
 
 export type WarmupTopicProfile = {
@@ -50,345 +32,130 @@ export type WarmupIntentPack = WarmupTopicProfile & {
 
 const WARMUP_TOPIC_LANES: WarmupTopicLane[] = [
   {
-    id: "art_commissions",
+    id: "vendor_sales",
+    label: "Vendor sales teams",
     keywords: [
-      "art",
-      "artist",
-      "painting",
-      "paintings",
-      "commission",
-      "commissions",
-      "studio",
-      "gallery",
-      "framing",
-      "mural",
-      "interior design",
-      "office furniture",
-      "furniture",
-    ],
-    copyTerm: "studio and art commissions",
-    discoveryQuery: "corporate art consultants",
-  },
-  {
-    id: "custom_framers",
-    keywords: [
-      "art",
-      "artist",
-      "painting",
-      "paintings",
-      "commission",
-      "commissions",
-      "studio",
-      "gallery",
-      "framing",
-      "frame",
-      "custom framing",
-    ],
-    copyTerm: "custom framing",
-    discoveryQuery: "custom framing companies",
-  },
-  {
-    id: "interior_design",
-    keywords: [
-      "art",
-      "artist",
-      "painting",
-      "paintings",
-      "commission",
-      "commissions",
-      "studio",
-      "gallery",
-      "interior design",
-      "interior designer",
-      "decor",
-    ],
-    copyTerm: "interior design projects",
-    discoveryQuery: "commercial interior design firms",
-  },
-  {
-    id: "studio_furniture",
-    keywords: [
-      "art",
-      "artist",
-      "painting",
-      "paintings",
-      "commission",
-      "commissions",
-      "studio",
-      "office furniture",
-      "furniture",
-      "studio furniture",
-      "workspace",
-    ],
-    copyTerm: "studio furniture",
-    discoveryQuery: "commercial office furniture dealers",
-  },
-  {
-    id: "bootstrapped_founders",
-    keywords: [
-      "bootstrapped",
-      "self-funded",
-      "self funded",
-      "selffunded",
-      "founder",
-      "founders",
-      "operator",
-      "operators",
-      "aws credits",
-      "cloud credits",
-      "saas founders",
-      "micro-saas",
-      "indie hacker",
-    ],
-    copyTerm: "self-funded founder operations",
-    discoveryQuery: "B2B SaaS products",
-  },
-  {
-    id: "b2b_saas_companies",
-    keywords: [
-      "bootstrapped",
-      "self-funded",
-      "self funded",
-      "selffunded",
-      "founder",
-      "founders",
-      "operator",
-      "operators",
-      "saas",
-      "b2b saas",
-      "software company",
-      "micro-saas",
-    ],
-    copyTerm: "B2B SaaS company operations",
-    discoveryQuery: "SaaS software companies",
-  },
-  {
-    id: "indie_software_companies",
-    keywords: [
-      "bootstrapped",
-      "self-funded",
-      "self funded",
-      "selffunded",
-      "founder",
-      "founders",
-      "operator",
-      "operators",
-      "indie hacker",
-      "indie software",
-      "micro-saas",
+      "pricing",
+      "demo",
+      "sales",
+      "solutions",
+      "product",
+      "platform",
       "software",
+      "tool",
+      "vendor",
+      "buy",
+      "quote",
+      "case study",
+      "rate card",
     ],
-    copyTerm: "indie software companies",
-    discoveryQuery: "developer tool startups",
+    copyTerm: "vendor research",
+    discoveryPromptTemplate:
+      "sales teams at SaaS, software, service, or vendor companies that can answer legitimate pricing, fit, case-study, or product questions about {{topic}}",
   },
   {
-    id: "startup_cloud_credits",
+    id: "vendor_support",
+    label: "Vendor support teams",
     keywords: [
-      "bootstrapped",
-      "self-funded",
-      "self funded",
-      "selffunded",
-      "founder",
-      "founders",
-      "operator",
-      "operators",
-      "aws credits",
-      "cloud credits",
-      "startup credits",
-      "saas founders",
-    ],
-    copyTerm: "startup cloud credits",
-    discoveryQuery: "startup accelerator programs",
-  },
-  {
-    id: "qa_testing",
-    keywords: [
-      "qa",
-      "testing",
-      "test automation",
-      "software testing",
-      "quality assurance",
-      "bug",
-      "bugs",
-      "product qa",
-      "engineering quality",
-      "swarmtester",
-    ],
-    copyTerm: "software testing",
-    discoveryQuery: "software QA companies",
-  },
-  {
-    id: "personalized_video",
-    keywords: [
-      "personalized video",
-      "video",
-      "ai video",
-      "sales video",
-      "customer success",
-      "onboarding",
-      "re-engagement",
-      "creator workflows",
-      "bulk personalization",
-      "video outreach",
-      "bhuman",
-    ],
-    copyTerm: "personalized video",
-    discoveryQuery: "video production agencies",
-  },
-  {
-    id: "local_hospitality",
-    keywords: [
-      "vibe",
-      "vibes",
-      "istanbul",
-      "hospitality",
-      "venue",
-      "event",
-      "tourism",
-      "restaurant",
-      "bar",
-      "cafe",
-      "community",
-      "local",
-    ],
-    copyTerm: "local venue and hospitality operations",
-    discoveryQuery: "Istanbul boutique hotels",
-  },
-  {
-    id: "prospect_data",
-    keywords: [
-      "prospect",
-      "prospecting",
-      "lead list",
-      "lead lists",
-      "enrich",
-      "enrichment",
-      "market note",
-      "market notes",
-      "market research",
-      "source-backed",
-      "signal",
-      "signals",
-      "data provider",
-    ],
-    copyTerm: "prospect data",
-    discoveryQuery: "sales intelligence software companies",
-  },
-  {
-    id: "outbound",
-    keywords: [
-      "outbound",
-      "pipeline",
-      "sales development",
-      "sdr",
-      "bdr",
-      "demand gen",
-      "demand generation",
-      "cold email",
-      "lead generation",
-      "gtm",
-    ],
-    copyTerm: "outbound",
-    discoveryQuery: "lead generation agencies",
-  },
-  {
-    id: "automation",
-    keywords: [
-      "automation",
-      "automations",
+      "support",
+      "help",
+      "docs",
+      "documentation",
+      "integration",
+      "api",
       "workflow",
-      "workflows",
-      "systems",
-      "ops",
-      "operations",
-      "ai automation",
-      "agentic",
-      "process automation",
+      "export",
+      "setup",
+      "account",
+      "technical",
     ],
-    copyTerm: "automation",
-    discoveryQuery: "workflow automation software companies",
+    copyTerm: "support inquiry",
+    discoveryPromptTemplate:
+      "support or customer success teams for tools and services related to {{topic}} where a normal user might ask about setup, integrations, limits, or workflow",
   },
   {
-    id: "revops",
-    keywords: [
-      "revops",
-      "revenue operations",
-      "sales ops",
-      "sales operations",
-      "crm ops",
-      "go to market systems",
-      "gtm systems",
-      "crm implementation",
-    ],
-    copyTerm: "revops",
-    discoveryQuery: "revenue operations agencies",
-  },
-  {
-    id: "agency_growth",
+    id: "agency_services",
+    label: "Agencies and service providers",
     keywords: [
       "agency",
-      "agencies",
       "consultant",
-      "consultants",
       "consulting",
-      "client delivery",
-      "client services",
-      "service provider",
-      "services firm",
+      "service",
+      "services",
+      "studio",
+      "implementation",
+      "retainer",
+      "portfolio",
+      "examples",
     ],
-    copyTerm: "agency growth",
-    discoveryQuery: "founder-led B2B agencies",
+    copyTerm: "service provider research",
+    discoveryPromptTemplate:
+      "agencies, consultants, studios, or service providers that might answer availability, fit, examples, or retainer questions around {{topic}}",
   },
   {
-    id: "paid_social",
+    id: "newsletter_sponsorship",
+    label: "Newsletters and communities",
     keywords: [
-      "paid social",
-      "performance marketing",
-      "paid media",
-      "media buying",
-      "tiktok",
-      "creative strategy",
-      "acquisition",
+      "newsletter",
+      "sponsor",
+      "sponsorship",
+      "community",
+      "event",
+      "webinar",
+      "audience",
+      "media kit",
+      "rate card",
+      "advertise",
     ],
-    copyTerm: "paid social",
-    discoveryQuery: "paid social agencies",
+    copyTerm: "community or sponsorship research",
+    discoveryPromptTemplate:
+      "newsletters, communities, events, podcasts, or media operators that can answer sponsorship, audience, or partnership questions about {{topic}}",
   },
   {
-    id: "retention",
+    id: "partner_programs",
+    label: "Partner programs",
     keywords: [
-      "retention",
-      "lifecycle",
-      "email and sms",
-      "sms",
-      "crm marketing",
-      "retention agency",
-      "customer retention",
+      "partner",
+      "partners",
+      "partnership",
+      "integration",
+      "marketplace",
+      "ecosystem",
+      "affiliate",
+      "co-marketing",
+      "referral",
     ],
-    copyTerm: "retention",
-    discoveryQuery: "email retention agencies",
+    copyTerm: "partner research",
+    discoveryPromptTemplate:
+      "partner, integration, marketplace, affiliate, or co-marketing teams that can answer legitimate partnership questions related to {{topic}}",
   },
   {
-    id: "finance_ops",
+    id: "freelancer_projects",
+    label: "Freelancers and contractors",
     keywords: [
-      "bookkeeping",
-      "tax",
-      "accounting",
-      "fractional cfo",
-      "payroll",
-      "peo",
-      "compliance",
-      "finance ops",
-      "banking",
-      "spend management",
-      "accounts payable",
-      "accounts receivable",
+      "freelance",
+      "freelancer",
+      "contractor",
+      "available",
+      "availability",
+      "portfolio",
+      "project",
+      "hourly",
+      "quote",
+      "examples",
     ],
-    copyTerm: "finance ops",
-    discoveryQuery: "fractional CFO firms",
+    copyTerm: "contractor research",
+    discoveryPromptTemplate:
+      "freelancers or contractors who might answer real availability, portfolio, or small-project questions related to {{topic}}",
   },
 ];
 
-const DEFAULT_WARMUP_LANES: WarmupTopicLane["id"][] = ["outbound", "automation", "prospect_data"];
+const DEFAULT_WARMUP_LANES: WarmupTopicLane["id"][] = [
+  "vendor_sales",
+  "vendor_support",
+  "agency_services",
+  "partner_programs",
+];
 
 function normalizeText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -467,17 +234,48 @@ function deriveWarmupLanes(haystack: string) {
   );
 }
 
+function phraseCandidates(value: unknown) {
+  const text = normalizeText(value)
+    .replace(/\bCTA\s*:\s*[^\n]+/gi, " ")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .trim();
+  if (!text) return [];
+  return text
+    .split(/[.;:\n,]|(?:\s+-\s+)/)
+    .map((entry) => normalizeText(entry))
+    .filter((entry) => {
+      const wordCount = entry.split(/\s+/).filter(Boolean).length;
+      return wordCount >= 2 && wordCount <= 12;
+    });
+}
+
+function deriveContextTerms(values: unknown[]) {
+  const terms = dedupeNormalized(values.flatMap((value) => phraseCandidates(value)));
+  return terms
+    .filter((term) => !/^(quick question|question|cold email|outbound email)$/i.test(term))
+    .slice(0, 4);
+}
+
+function interpolateDiscoveryPrompt(template: string, topic: string) {
+  const safeTopic = topic || "the brand's market, tools, customers, and day-to-day operations";
+  return template.replace(/{{\s*topic\s*}}/g, safeTopic);
+}
+
 function buildWarmupProfileFromValues(values: unknown[]): WarmupTopicProfile {
   const haystack = toLowerText(values);
   const lanes = deriveWarmupLanes(haystack);
-  const topicTerms = lanes.map((lane) => lane.copyTerm);
-  const discoveryQueries = lanes.slice(0, 1).map((lane) => lane.discoveryQuery);
+  const contextTerms = deriveContextTerms(values);
+  const topicTerms = contextTerms.length ? contextTerms : lanes.map((lane) => lane.copyTerm);
+  const topic = formatTopicList(topicTerms);
+  const discoveryPrompts = lanes
+    .slice(0, 1)
+    .map((lane) => interpolateDiscoveryPrompt(lane.discoveryPromptTemplate, topic));
   return {
     laneIds: lanes.map((lane) => lane.id),
     topicTerms,
-    audienceText: `B2B teams working on ${formatTopicList(topicTerms)}.`,
-    offerText: formatTopicList(topicTerms),
-    discoveryPrompt: buildWarmupDiscoveryPromptForTerms(discoveryQueries),
+    audienceText: `People and companies who can legitimately answer business questions about ${topic}.`,
+    offerText: topic,
+    discoveryPrompt: buildWarmupDiscoveryPromptForTerms(discoveryPrompts),
   };
 }
 
@@ -612,9 +410,12 @@ export function deriveWarmupTopicLaneDescriptors(input: {
     .filter((lane): lane is WarmupTopicLane => Boolean(lane))
     .map((lane) => ({
       id: lane.id,
-      label: titleCaseWords(lane.copyTerm),
+      label: lane.label || titleCaseWords(lane.copyTerm),
       copyTerm: lane.copyTerm,
-      discoveryPrompt: buildWarmupDiscoveryPromptForTerms([lane.discoveryQuery]),
+      discoveryPrompt: interpolateDiscoveryPrompt(
+        lane.discoveryPromptTemplate,
+        formatTopicList(profile.topicTerms)
+      ),
     }));
 }
 
@@ -681,6 +482,12 @@ function scoreWarmupRow(text: string, profile: WarmupTopicProfile) {
     }
     if (text.includes(lane.copyTerm)) {
       score += 3;
+    }
+  }
+  for (const term of profile.topicTerms) {
+    const normalizedTerm = normalizeText(term).toLowerCase();
+    if (normalizedTerm && text.includes(normalizedTerm)) {
+      score += normalizedTerm.includes(" ") ? 4 : 1;
     }
   }
 

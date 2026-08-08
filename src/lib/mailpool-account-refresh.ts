@@ -84,6 +84,16 @@ function hasBlockingGmailUiLoginState(config: OutreachAccountConfig) {
   );
 }
 
+function mailboxHasSmtpCredentials(mailbox: MailpoolMailbox) {
+  return Boolean(
+    String(mailbox.smtpHost ?? "").trim() &&
+      String(mailbox.smtpUsername ?? "").trim() &&
+      String(mailbox.imapHost ?? "").trim() &&
+      String(mailbox.status ?? "").trim().toLowerCase() === "active" &&
+      (String(mailbox.smtpPassword ?? "").trim() || String(mailbox.password ?? "").trim())
+  );
+}
+
 function mailpoolMailboxResourceStatus(mailbox: MailpoolMailbox) {
   const providerError = mailpoolMailboxErrorMessage(mailbox);
   const mailboxStatus = String(mailbox.status ?? "").trim().toLowerCase();
@@ -96,14 +106,22 @@ function mailpoolMailboxResourceStatus(mailbox: MailpoolMailbox) {
 
 function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: OutreachAccountConfig) {
   const fromEmail = mailbox.email.trim().toLowerCase();
-  const usesGmailUi = existingConfig.mailbox.deliveryMethod === "gmail_ui";
+  const existingUsesGmailUi = existingConfig.mailbox.deliveryMethod === "gmail_ui";
+  const gmailUiBlocked = hasBlockingGmailUiLoginState(existingConfig);
+  const useSmtpFallback = existingUsesGmailUi && gmailUiBlocked && mailboxHasSmtpCredentials(mailbox);
+  const deliveryMethod = useSmtpFallback ? ("smtp" as const) : existingConfig.mailbox.deliveryMethod;
+  const usesGmailUi = deliveryMethod === "gmail_ui";
   const providerError = mailpoolMailboxErrorMessage(mailbox);
-  const disabled = shouldDisableMailpoolAccount(mailbox) || hasBlockingGmailUiLoginState(existingConfig);
+  const disabled = shouldDisableMailpoolAccount(mailbox) || (usesGmailUi && gmailUiBlocked);
   const loginStatus = normalizeGmailUiLoginStatus({
-    deliveryMethod: usesGmailUi ? "gmail_ui" : existingConfig.mailbox.deliveryMethod,
+    deliveryMethod,
     state: existingConfig.mailbox.gmailUiLoginState,
     checkedAt: existingConfig.mailbox.gmailUiLoginCheckedAt,
-    message: providerError || existingConfig.mailbox.gmailUiLoginMessage,
+    message:
+      providerError ||
+      (useSmtpFallback
+        ? "Mailpool SMTP is available, so refresh moved delivery off Gmail UI."
+        : existingConfig.mailbox.gmailUiLoginMessage),
   });
   return {
     provider: "mailpool" as const,
@@ -134,7 +152,7 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
       },
       mailbox: {
         provider: usesGmailUi ? ("gmail" as const) : ("imap" as const),
-        deliveryMethod: usesGmailUi ? ("gmail_ui" as const) : existingConfig.mailbox.deliveryMethod,
+        deliveryMethod,
         email: fromEmail,
         status: mailbox.imapHost ? ("connected" as const) : ("disconnected" as const),
         host: String(mailbox.imapHost ?? "").trim(),
@@ -149,7 +167,11 @@ function buildMailpoolAccountPatch(mailbox: MailpoolMailbox, existingConfig: Out
         gmailUiBrowserChannel: String(existingConfig.mailbox.gmailUiBrowserChannel ?? "chrome").trim() || "chrome",
         gmailUiLoginState: loginStatus.gmailUiLoginState,
         gmailUiLoginCheckedAt: loginStatus.gmailUiLoginCheckedAt,
-        gmailUiLoginMessage: providerError || loginStatus.gmailUiLoginMessage,
+        gmailUiLoginMessage:
+          providerError ||
+          (useSmtpFallback
+            ? "Mailpool SMTP is available, so refresh moved delivery off Gmail UI."
+            : loginStatus.gmailUiLoginMessage),
         proxyUrl: String(existingConfig.mailbox.proxyUrl ?? "").trim(),
         proxyHost: String(existingConfig.mailbox.proxyHost ?? "").trim(),
         proxyPort: Number(existingConfig.mailbox.proxyPort ?? 0) || 0,
@@ -349,20 +371,7 @@ export async function syncMailpoolOutreachAccountCredentials(accountId: string):
     return updated ?? account;
   }
 
-  const providerError = mailpoolMailboxErrorMessage(mailbox);
-  const disabled = shouldDisableMailpoolAccount(mailbox) || hasBlockingGmailUiLoginState(account.config);
-  const updated = await updateOutreachAccount(account.id, {
-    status: disabled ? ("inactive" as const) : ("active" as const),
-    config: {
-      mailpool: {
-        status: mailpoolMailboxResourceStatus(mailbox),
-      },
-      mailbox: {
-        ...(providerError ? { gmailUiLoginState: "error" as const, gmailUiLoginMessage: providerError } : {}),
-      },
-    },
-    credentials: buildMailpoolMailboxCredentials(mailbox),
-  });
+  const updated = await updateOutreachAccount(account.id, buildMailpoolAccountPatch(mailbox, account.config));
   return updated ?? account;
 }
 

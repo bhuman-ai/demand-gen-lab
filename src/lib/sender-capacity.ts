@@ -12,8 +12,8 @@ const DEFAULT_TIMEZONE = "America/Los_Angeles";
 
 export const MAX_ACTIVE_SENDERS_PER_DOMAIN = 4;
 export const MAX_SENDER_DAILY_CAP = 100;
-export const MIN_WARMUP_CAMPAIGN_DAILY_CAP = 20;
-export const MAX_WARMUP_CAMPAIGN_DAILY_CAP = 25;
+export const MIN_WARMUP_CAMPAIGN_DAILY_CAP = readIntEnv("WARMUP_CAMPAIGN_FRESH_DAILY_CAP", 3, 1, 20);
+export const MAX_WARMUP_CAMPAIGN_DAILY_CAP = readIntEnv("WARMUP_CAMPAIGN_DAILY_CAP_CEILING", 12, 1, 50);
 export const MAX_OUTBOUND_SENDER_DAILY_CAP = 60;
 
 const OUTBOUND_RAMP_DAILY_CAPS = [3, 8, 15, 25, 40, MAX_OUTBOUND_SENDER_DAILY_CAP] as const;
@@ -51,6 +51,12 @@ type SenderCapacitySubject = {
   row?: DomainRow | null;
   scorecard?: SenderDeliverabilityScorecard | null;
 };
+
+function readIntEnv(name: string, fallback: number, min: number, max: number) {
+  const parsed = Math.round(Number(process.env[name]));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
 
 function toDate(value: string) {
   const parsed = new Date(value);
@@ -167,9 +173,11 @@ export function laneMinSpacingMinutesForDailyCap(dailyCap: number, businessHours
 }
 
 export function warmupCampaignDailyCapForDay(day: number) {
+  const safeDay = normalizeWarmupDay(day);
+  const evidenceCappedRamp = MIN_WARMUP_CAMPAIGN_DAILY_CAP + Math.max(0, safeDay - 1) * 2;
   return Math.min(
     MAX_WARMUP_CAMPAIGN_DAILY_CAP,
-    Math.max(MIN_WARMUP_CAMPAIGN_DAILY_CAP, normalizeWarmupDay(day) * 5)
+    Math.max(MIN_WARMUP_CAMPAIGN_DAILY_CAP, evidenceCappedRamp)
   );
 }
 

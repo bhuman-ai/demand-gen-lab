@@ -1,4 +1,5 @@
 import { generateJsonWithLlm } from "@/lib/llm-json";
+import { getWarmupOperatingGuide } from "@/lib/warmup-intelligence";
 import type {
   OperatorChatAssistantReply,
   OperatorChatRequest,
@@ -229,6 +230,8 @@ function buildAgentPrompt(input: {
     "Read tools are your senses. Use them freely when the compact context is insufficient, stale, ambiguous, or lacks raw evidence. Prefer broad investigation over guessing.",
     "If the user asks for actual content, causes, live account state, replies, drafts, campaign copy, deliverability evidence, leads, runs, or what changed, inspect with tools before answering from memory.",
     "If you are unsure which read tool fits, call investigate_brand_data with brandId, query, and any known IDs. If the question is about real outbound not moving, inspect the full blocker chain rather than one local status.",
+    "If the question is about warmup, sender reputation, inbox trust, or whether to ramp, inspect warmup intelligence and delivery evidence; treat warmup as reply acquisition, not a fixed calendar script.",
+    "When warmup/setup is involved, classify the blocker as sender reputation, setup/route, campaign/readiness, list/prep, provider, or missing platform capability before recommending action.",
     "Write tools are your hands. If a write/send/launch/delete/provision/buy action is the right next move, choose the matching write tool and stop; the host will execute or request confirmation according to risk.",
     "After a tool failure, do not simply summarize the failure. Either try a materially different available tool, inspect the cause with a read tool, or prove that the remaining blocker is missing credentials, missing permissions, budget/risk approval, or a missing platform capability.",
     "When the right next move is to involve the user, call request_user_attention. Use it for any model-chosen reason: a blocker, credential/setup ask, strategic question, risk warning, achievement update, or decision point. Do not use it for work you can complete with tools yourself.",
@@ -260,6 +263,7 @@ function buildAgentPrompt(input: {
     `Mode: ${input.mode === "recommendation_only" ? "recommendation_only" : "default"}`,
     `Active brandId: ${input.brandId || "(none)"}`,
     `Planning step: ${input.stepNumber} of ${input.maxSteps}`,
+    `Warmup/email setup operating guide JSON: ${JSON.stringify(getWarmupOperatingGuide())}`,
     `Tool catalog JSON: ${JSON.stringify(buildToolCatalog(input.tools))}`,
     `Recent conversation JSON: ${JSON.stringify(compactForPrompt(input.recentMessages, 6000))}`,
     `Compact brand context JSON: ${JSON.stringify(compactForPrompt(input.compactContext, 12000))}`,

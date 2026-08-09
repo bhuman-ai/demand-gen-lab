@@ -32,3 +32,37 @@ export function socialDiscoveryCampaignBrand(brand: BrandRecord): BrandRecord {
     keyBenefits: [],
   };
 }
+
+function campaignBrandName(value: string) {
+  return String(value ?? "")
+    .split(/\s+[·—|]\s+/)[0]
+    ?.trim() ?? "";
+}
+
+/**
+ * Preview requests arrive before TapIn has saved the draft campaign to the
+ * backend brand. Build the same isolated campaign context from the draft so a
+ * seed brand (for example BHuman) cannot score or name an Olyvv preview.
+ */
+export function tapInPreviewCampaignBrand(
+  brand: BrandRecord,
+  input: { campaignName?: string; targets?: string[] }
+): BrandRecord {
+  const targets = Array.from(
+    new Set((input.targets ?? []).map((target) => String(target ?? "").trim()).filter(Boolean))
+  );
+  const name = campaignBrandName(input.campaignName ?? "") || brand.name;
+
+  return {
+    ...brand,
+    name,
+    website: "",
+    product: targets.join(", ") || name,
+    notes: "",
+    socialDiscoveryQueries: targets,
+    targetMarkets: targets,
+    idealCustomerProfiles: [],
+    keyFeatures: [],
+    keyBenefits: [],
+  };
+}

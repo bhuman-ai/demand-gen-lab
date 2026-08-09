@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
+import { getOutreachAccountSecrets, type OutreachAccountSecrets } from "@/lib/outreach-data";
+import { tapInPreviewCampaignBrand } from "@/lib/social-discovery-campaign-context";
 import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
 import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
@@ -7,6 +9,7 @@ import {
 } from "@/lib/social-discovery-youtube-policy";
 import { generateTapInThreadPreview } from "@/lib/tapinsocial-preview";
 import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
+import { hasYouTubeOAuthCredentials } from "@/lib/youtube";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -39,6 +42,60 @@ function strings(value: unknown, limit = 12) {
   ).slice(0, limit);
 }
 
+async function workspaceYouTubeSearchSecrets(workspace: Awaited<ReturnType<typeof getTapInWorkspaceForUser>>) {
+  if (!workspace) return null;
+  const candidateIds = Array.from(new Set([
+    workspace.youtubeAccountId,
+    ...workspace.youtubeAccounts.map((account) => account.accountId),
+    workspace.youtubeSeedAccountId,
+  ].filter(Boolean)));
+
+  for (const accountId of candidateIds) {
+    const secrets = await getOutreachAccountSecrets(accountId).catch(() => null);
+    if (secrets && hasYouTubeOAuthCredentials(secrets)) {
+      return secrets satisfies OutreachAccountSecrets;
+    }
+  }
+  return null;
+}
+
+function noMatchResponse(discovery: Awaited<ReturnType<typeof discoverYouTubeSearchPostsForBrand>>) {
+  const { found, eligible } = discovery.summary;
+  const everyQueryFailed = discovery.queryStats.length > 0 &&
+    discovery.queryStats.every((query) => Boolean(query.error));
+
+  if (everyQueryFailed) {
+    console.error("[tapin-preview] YouTube discovery failed", JSON.stringify({
+      queries: discovery.queries,
+      errors: discovery.errors.map((error) => ({ query: error.query, message: error.message })),
+    }));
+    return NextResponse.json(
+      {
+        error: "YouTube search could not run. Reconnect a YouTube account, then try again.",
+        errorCode: "youtube_search_failed",
+      },
+      { status: 502 }
+    );
+  }
+
+  if (found === 0) {
+    return NextResponse.json(
+      { error: "YouTube found no recent videos for these topics. Increase video age or broaden the topics." },
+      { status: 422 }
+    );
+  }
+  if (eligible === 0) {
+    return NextResponse.json(
+      { error: `YouTube found ${found} recent video${found === 1 ? "" : "s"}, but none met the minimum subscriber count. Lower that minimum and try again.` },
+      { status: 422 }
+    );
+  }
+  return NextResponse.json(
+    { error: `YouTube found ${found} recent video${found === 1 ? "" : "s"}; ${eligible} passed the account rules, but none met relevance and momentum. Choose Broad relevance or Any momentum.` },
+    { status: 422 }
+  );
+}
+
 export async function POST(request: Request) {
   const expected = expectedSecret();
   if (!expected || suppliedSecret(request) !== expected) {
@@ -49,6 +106,7 @@ export async function POST(request: Request) {
   const userId = requiredText(body.userId, 120);
   const brandId = requiredText(body.brandId, 120);
   const campaignType = body.campaignType === "comment" ? "comment" : "thread";
+  const campaignName = requiredText(body.campaignName, 240);
   const openingPrompt = requiredText(body.openingPrompt, 2000);
   const replyPrompt = requiredText(body.replyPrompt, 2000);
   const targets = strings(body.targets);
@@ -75,6 +133,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    const campaignBrand = tapInPreviewCampaignBrand(brand, { campaignName, targets });
     let video = {
       title: videoTitle,
       description: videoDescription,
@@ -87,21 +146,18 @@ export async function POST(request: Request) {
         body.youtubeDiscoveryPolicy,
         DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
       ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
+      const youtubeSearchSecrets = await workspaceYouTubeSearchSecrets(workspace);
       const discovery = await discoverYouTubeSearchPostsForBrand({
-        brand,
+        brand: campaignBrand,
         queries: targets.slice(0, 4),
         maxResults: 8,
-        preferApiKey: true,
+        secrets: youtubeSearchSecrets ?? undefined,
+        preferApiKey: !youtubeSearchSecrets,
         policy: youtubeDiscoveryPolicy,
       });
       const matchedVideo = discovery.posts[0];
       if (!matchedVideo) {
-        return NextResponse.json(
-          {
-            error: "No YouTube videos matched this campaign’s targeting and video rules. Try broader targets or loosen the filters.",
-          },
-          { status: 422 }
-        );
+        return noMatchResponse(discovery);
       }
       video = {
         title: requiredText(matchedVideo.title, 400),
@@ -115,7 +171,7 @@ export async function POST(request: Request) {
 
     const preview = await generateTapInThreadPreview({
       campaignType,
-      brandName: brand.name,
+      brandName: campaignBrand.name,
       openingPrompt,
       replyPrompt,
       videoTitle: video.title,

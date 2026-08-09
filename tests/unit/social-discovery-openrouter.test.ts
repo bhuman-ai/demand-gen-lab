@@ -123,9 +123,9 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
     assert.equal(drafted.interactionPlan.sequence.length, 2);
     assert.equal(
       drafted.interactionPlan.sequence[0]?.draft,
-      "personalization without sounding robotic is the hard part, especially at scale"
+      "Personalization without sounding robotic is the hard part, especially at scale"
     );
-    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "outreach still feels awkward. I work on BHuman and we started with this exact headache");
+    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "Outreach still feels awkward. I work on BHuman and we started with this exact headache");
     assert.equal(drafted.interactionPlan.generationPromptMode, "auto");
   } finally {
     globalThis.fetch = originalFetch;

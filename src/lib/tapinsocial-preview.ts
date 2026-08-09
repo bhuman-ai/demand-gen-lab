@@ -3,6 +3,11 @@ import {
   sanitizeSocialCommentText,
   SOCIAL_COMMENT_PUNCTUATION_RULE,
 } from "@/lib/social-comment-text";
+import {
+  YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
+  youtubeBrandAffiliationProblem,
+  youtubeCommentStyleProblem,
+} from "@/lib/youtube-comment-style";
 
 export type TapInThreadPreviewInput = {
   campaignType?: "comment" | "thread";
@@ -34,7 +39,9 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
       "- Apply the opening prompt to openingComment.",
       "- React to one concrete point supported by the video title or description.",
       "- It must work as a natural standalone YouTube comment.",
-      "- Keep it concise, conversational, and free of unsupported claims.",
+      "- Keep it free of unsupported claims.",
+      YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
+      "- If openingComment mentions the brand, identify the affiliation in first person.",
       "",
       `Brand name: ${compact(input.brandName, 160)}`,
       `Opening prompt: ${compact(input.openingPrompt, 2000)}`,
@@ -54,13 +61,14 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     "- React to one concrete point supported by the video title or description.",
     "- It must work as a natural standalone YouTube comment.",
     "- Do not mention the brand or obviously tee up a product recommendation.",
-    "- Keep it concise, conversational, and free of marketing language.",
+    "- Keep it free of marketing language.",
+    YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
     "",
     "Reply rules:",
     `- ${SOCIAL_COMMENT_PUNCTUATION_RULE}`,
     "- Apply only the reply prompt to reply.",
     "- Reply directly to openingComment as a different account.",
-    "- If the brand is mentioned, identify the affiliation plainly instead of posing as an independent customer.",
+    "- If the brand is mentioned, identify the affiliation in first person, for example 'i work on [brand]'. Never pose as an independent customer.",
     "- Never invent usage, results, customer experience, or unsupported product claims.",
     "- Keep it concise and natural; do not include a link unless the opening comment explicitly asks for one.",
     "",
@@ -77,38 +85,59 @@ export async function generateTapInThreadPreview(
   input: TapInThreadPreviewInput
 ): Promise<TapInThreadPreview> {
   const commentOnly = input.campaignType === "comment";
-  const result = await generateJsonWithLlm({
-    task: "social_comment_planning",
-    prompt: buildTapInPreviewPrompt(input),
-    format: {
-      type: "json_schema",
-      name: commentOnly ? "tapin_comment_preview" : "tapin_thread_preview",
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: commentOnly
-          ? { openingComment: { type: "string" } }
-          : { openingComment: { type: "string" }, reply: { type: "string" } },
-        required: commentOnly ? ["openingComment"] : ["openingComment", "reply"],
-      },
-    },
-    maxOutputTokens: 500,
-    reasoningEffort: "low",
-    providerOverride: "openrouter",
-    openRouterOverrideModel:
-      String(
-        process.env.OPENROUTER_MODEL_TAPIN_PREVIEW ??
-          process.env.OPENROUTER_MODEL_SOCIAL_COMMENT_PLANNING ??
-          ""
-      ).trim() || undefined,
-  });
+  const basePrompt = buildTapInPreviewPrompt(input);
+  let lastProblem = "";
 
-  const parsed = JSON.parse(result.text) as Record<string, unknown>;
-  const openingComment = compact(sanitizeSocialCommentText(parsed.openingComment), 280);
-  const reply = compact(sanitizeSocialCommentText(parsed.reply), 280);
-  if (!openingComment || (!commentOnly && !reply)) {
-    throw new Error("Preview generation returned an incomplete thread.");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await generateJsonWithLlm({
+      task: "social_comment_planning",
+      prompt: attempt === 0
+        ? basePrompt
+        : [
+            basePrompt,
+            "",
+            `Regenerate from scratch. The previous draft was rejected because ${lastProblem}.`,
+            "Make both lines shorter, looser, and more ordinary. Do not reuse the prior wording.",
+          ].join("\n"),
+      format: {
+        type: "json_schema",
+        name: commentOnly ? "tapin_comment_preview" : "tapin_thread_preview",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: commentOnly
+            ? { openingComment: { type: "string" } }
+            : { openingComment: { type: "string" }, reply: { type: "string" } },
+          required: commentOnly ? ["openingComment"] : ["openingComment", "reply"],
+        },
+      },
+      maxOutputTokens: 300,
+      reasoningEffort: "low",
+      providerOverride: "openrouter",
+      openRouterOverrideModel:
+        String(
+          process.env.OPENROUTER_MODEL_TAPIN_PREVIEW ??
+            process.env.OPENROUTER_MODEL_SOCIAL_COMMENT_PLANNING ??
+            ""
+        ).trim() || undefined,
+    });
+
+    const parsed = JSON.parse(result.text) as Record<string, unknown>;
+    const openingComment = compact(sanitizeSocialCommentText(parsed.openingComment), 180);
+    const reply = compact(sanitizeSocialCommentText(parsed.reply), 150);
+    lastProblem = youtubeCommentStyleProblem(openingComment, "opening");
+    if (!lastProblem && !commentOnly) {
+      lastProblem = youtubeCommentStyleProblem(reply, "reply");
+    }
+    if (!lastProblem) {
+      lastProblem = youtubeBrandAffiliationProblem(openingComment, input.brandName) ||
+        youtubeBrandAffiliationProblem(reply, input.brandName);
+    }
+    if (!lastProblem && openingComment && (commentOnly || reply)) {
+      return { openingComment, reply };
+    }
+    if (!lastProblem) lastProblem = "the thread was incomplete";
   }
 
-  return { openingComment, reply };
+  throw new Error(`Preview generation did not sound like a native YouTube comment: ${lastProblem}.`);
 }

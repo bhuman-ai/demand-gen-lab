@@ -2,11 +2,15 @@ import { NextResponse } from "next/server";
 import { getBrandById } from "@/lib/factory-data";
 import { getOutreachAccountSecrets, type OutreachAccountSecrets } from "@/lib/outreach-data";
 import { tapInPreviewCampaignBrand } from "@/lib/social-discovery-campaign-context";
-import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtube-search";
 import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
   normalizeSocialDiscoveryYouTubePolicy,
 } from "@/lib/social-discovery-youtube-policy";
+import {
+  discoverTapInPreviewVideo,
+  tapInPreviewNoMatchError,
+  type TapInPreviewDiscoveryResult,
+} from "@/lib/tapinsocial-preview-discovery";
 import { generateTapInThreadPreview } from "@/lib/tapinsocial-preview";
 import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
 import { hasYouTubeOAuthCredentials } from "@/lib/youtube";
@@ -59,8 +63,10 @@ async function workspaceYouTubeSearchSecrets(workspace: Awaited<ReturnType<typeo
   return null;
 }
 
-function noMatchResponse(discovery: Awaited<ReturnType<typeof discoverYouTubeSearchPostsForBrand>>) {
-  const { found, eligible } = discovery.summary;
+function noMatchResponse(
+  discovery: TapInPreviewDiscoveryResult,
+  policy: NonNullable<ReturnType<typeof normalizeSocialDiscoveryYouTubePolicy>>
+) {
   const everyQueryFailed = discovery.queryStats.length > 0 &&
     discovery.queryStats.every((query) => Boolean(query.error));
 
@@ -78,29 +84,11 @@ function noMatchResponse(discovery: Awaited<ReturnType<typeof discoverYouTubeSea
     );
   }
 
-  if (found === 0) {
-    return NextResponse.json(
-      { error: "YouTube found no recent videos for these topics. Increase video age or broaden the topics." },
-      { status: 422 }
-    );
-  }
-  if (eligible === 0) {
-    return NextResponse.json(
-      { error: `YouTube found ${found} recent video${found === 1 ? "" : "s"}, but none met the minimum subscriber count. Lower that minimum and try again.` },
-      { status: 422 }
-    );
-  }
+  const error = tapInPreviewNoMatchError(discovery, policy);
   return NextResponse.json(
-    { error: `YouTube found ${found} recent video${found === 1 ? "" : "s"}; ${eligible} passed the account rules, but none met relevance and momentum. Choose Broad relevance or Any momentum.` },
-    { status: 422 }
+    { error: error.error, ...(error.errorCode ? { errorCode: error.errorCode } : {}) },
+    { status: error.status }
   );
-}
-
-function everyYouTubeQueryFailed(
-  discovery: Awaited<ReturnType<typeof discoverYouTubeSearchPostsForBrand>>
-) {
-  return discovery.queryStats.length > 0 &&
-    discovery.queryStats.every((query) => Boolean(query.error));
 }
 
 export async function POST(request: Request) {
@@ -154,28 +142,15 @@ export async function POST(request: Request) {
         DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
       ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
       const youtubeSearchSecrets = await workspaceYouTubeSearchSecrets(workspace);
-      const discoveryInput = {
+      const discovery = await discoverTapInPreviewVideo({
         brand: campaignBrand,
-        // A YouTube search costs 100 quota units. One representative target is
-        // enough for a preview; live discovery still rotates the full target set.
-        queries: targets.slice(0, 1),
-        maxResults: 8,
+        queries: targets,
         secrets: youtubeSearchSecrets ?? undefined,
         policy: youtubeDiscoveryPolicy,
-      };
-      let discovery = await discoverYouTubeSearchPostsForBrand({
-        ...discoveryInput,
-        preferApiKey: true,
       });
-      if (youtubeSearchSecrets && everyYouTubeQueryFailed(discovery)) {
-        discovery = await discoverYouTubeSearchPostsForBrand({
-          ...discoveryInput,
-          preferApiKey: false,
-        });
-      }
-      const matchedVideo = discovery.posts[0];
+      const matchedVideo = discovery.post;
       if (!matchedVideo) {
-        return noMatchResponse(discovery);
+        return noMatchResponse(discovery, youtubeDiscoveryPolicy);
       }
       video = {
         title: requiredText(matchedVideo.title, 400),

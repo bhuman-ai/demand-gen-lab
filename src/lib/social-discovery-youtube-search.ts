@@ -125,6 +125,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
   brand: BrandRecord;
   queries: string[];
   maxResults?: number;
+  order?: "date" | "relevance" | "viewCount";
   secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
   preferApiKey?: boolean;
   policy?: SocialDiscoveryYouTubePolicy | null;
@@ -151,7 +152,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
       const results = await searchYouTubeVideos({
         query,
         maxResults,
-        order: "date",
+        order: input.order ?? "date",
         publishedAfter,
         secrets: input.secrets,
         preferApiKey: input.preferApiKey ?? true,

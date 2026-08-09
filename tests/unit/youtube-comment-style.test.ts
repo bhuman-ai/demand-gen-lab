@@ -70,3 +70,17 @@ test("rejects a brand-first recommendation even when affiliation is disclosed", 
     /direct recommendation/i
   );
 });
+
+test("rejects product-copy conclusions inside otherwise casual replies", () => {
+  assert.match(
+    youtubeCommentStyleProblem(
+      "testing beats theory. i work on ClusterSEO and we see this constantly, verified recommendations beat generic playbooks",
+      "reply"
+    ),
+    /product jargon|canned brand proof/i
+  );
+  assert.match(
+    youtubeCommentStyleProblem("seo is rough. i work on ClusterSEO and this tool beats everything else", "reply"),
+    /competitive product claim/i
+  );
+});

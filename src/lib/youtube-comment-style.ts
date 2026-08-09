@@ -31,6 +31,9 @@ const FORMAL_OR_SALESY_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "product pitch", pattern: /\b(?:verifies?|helps? (?:you|people|teams|brands)|makes? it (?:easy|easier))\b/i },
   { label: "direct recommendation", pattern: /\b(?:i(?:'d| would) recommend|you should (?:try|use|check)|check (?:it|them) out|give (?:it|them) a try|worth (?:trying|checking))\b/i },
   { label: "testimonial pitch", pattern: /\b(?:works? (?:great|really well)|has been (?:great|amazing|solid)|good things with)\b/i },
+  { label: "product jargon", pattern: /\bverified recommendations?\b/i },
+  { label: "competitive product claim", pattern: /\b(?:recommendations?|platform|tool|product|service)\s+(?:beats?|outperforms?|wins? over)\b/i },
+  { label: "canned brand proof", pattern: /\bwe (?:see|hear) this (?:constantly|all the time|a lot)\b/i },
 ];
 
 function wordCount(value: string) {

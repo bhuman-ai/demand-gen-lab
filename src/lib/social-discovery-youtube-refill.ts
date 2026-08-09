@@ -169,8 +169,11 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
     1,
     25
   );
-  const useApiKeySearch = hasYouTubeDataApiKey();
-  const youtubeSearchCredentials = useApiKeySearch ? null : await resolveYouTubeSearchSecrets();
+  // Keep the shared API-key quota available for user-triggered previews. The
+  // background refill can use a connected account and only falls back to the
+  // public-data key when no OAuth account is available.
+  const youtubeSearchCredentials = await resolveYouTubeSearchSecrets();
+  const useApiKeySearch = !youtubeSearchCredentials && hasYouTubeDataApiKey();
   const results = [];
 
   for (const brand of brands) {

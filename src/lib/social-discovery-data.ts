@@ -960,6 +960,27 @@ export async function listSocialDiscoveryPostsWithPendingReplies(input: {
     .slice(0, limit);
 }
 
+export async function clearSocialDiscoveryPendingRepliesForBrand(brandId: string) {
+  const posts = await listSocialDiscoveryPostsWithPendingReplies({
+    brandIds: [brandId],
+    limit: 500,
+  });
+  const cleared = await Promise.all(
+    posts.map((post) =>
+      updateSocialDiscoveryPostPendingReply({
+        id: post.id,
+        brandId,
+        pendingReply: null,
+      })
+    )
+  );
+  const clearedCount = cleared.filter(Boolean).length;
+  if (clearedCount !== posts.length) {
+    throw new Error("Not all scheduled TapIn replies could be cancelled.");
+  }
+  return clearedCount;
+}
+
 export async function updateSocialDiscoveryPostPromotionDraft(input: {
   id: string;
   brandId: string;

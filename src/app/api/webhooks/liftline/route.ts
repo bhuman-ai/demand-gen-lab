@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getBrandById, updateBrand } from "@/lib/factory-data";
 import { getTapInWorkspaceForUser, saveTapInYouTubeRoles } from "@/lib/tapinsocial-auth";
+import { campaignBrandName } from "@/lib/social-discovery-campaign-context";
 import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
   normalizeSocialDiscoveryYouTubePolicy,
@@ -124,9 +125,14 @@ export async function POST(request: Request) {
   const platforms = strings(autopilot.platforms ?? setup.platforms).filter(
     (platform) => platform === "instagram" || platform === "youtube"
   );
+  const activeCampaignName = campaignBrandName(String(setup.campaignName ?? ""));
   const requestedBrandName =
-    String(brandMention.exactBrandName ?? tenant.brandName ?? "").trim() || brand.name;
-  const positioning = String(brandMention.positioning ?? setup.brandSummary ?? "").trim();
+    activeCampaignName ||
+    String(brandMention.exactBrandName ?? tenant.brandName ?? "").trim() ||
+    brand.name;
+  const positioning = activeCampaignName
+    ? targets.join(", ") || activeCampaignName
+    : String(brandMention.positioning ?? setup.brandSummary ?? "").trim();
   const maximumSharePercent = Math.min(
     50,
     Math.max(10, Number(brandMention.maximumSharePercent) || 35)

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { BrandRecord } from "../../src/lib/factory-types";
 import {
+  campaignBrandName,
   socialDiscoveryCampaignBrand,
   tapInPreviewCampaignBrand,
 } from "../../src/lib/social-discovery-campaign-context";
@@ -37,6 +38,11 @@ function brand(overrides: Partial<BrandRecord> = {}): BrandRecord {
     ...overrides,
   };
 }
+
+test("campaign identity comes from the selected TapIn campaign, not the seed workspace", () => {
+  assert.equal(campaignBrandName("Olyvv · Recipe discovery"), "Olyvv");
+  assert.equal(campaignBrandName("Gatekept — Istanbul discovery"), "Gatekept");
+});
 
 test("TapIn runtime context replaces the seed brand identity without changing ownership", () => {
   const source = brand({

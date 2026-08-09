@@ -30,6 +30,11 @@ export type TapInActivitySnapshot = {
   events: TapInActivityEvent[];
 };
 
+function validTimestamp(value: string | undefined) {
+  const timestamp = Date.parse(String(value ?? ""));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function deliveryEvent(
   post: SocialDiscoveryPost,
   kind: TapInActivityEvent["kind"],
@@ -54,10 +59,13 @@ export function buildTapInActivitySnapshot(input: {
   enabled: boolean;
   commentedPosts: SocialDiscoveryPost[];
   pendingReplyPosts: SocialDiscoveryPost[];
+  campaignStartedAt?: string;
   now?: Date;
 }): TapInActivitySnapshot {
   const now = input.now ?? new Date();
   const thirtyDaysAgoMs = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+  const campaignStartedAtMs = validTimestamp(input.campaignStartedAt);
+  const windowStartMs = Math.max(thirtyDaysAgoMs, campaignStartedAtMs);
   const last24HoursMs = now.getTime() - 24 * 60 * 60 * 1000;
   const events = input.commentedPosts
     .flatMap((post) => {
@@ -65,11 +73,11 @@ export function buildTapInActivitySnapshot(input: {
       const comment = post.commentDelivery;
       if (!comment) return [];
       const rows: TapInActivityEvent[] = [];
-      if (Date.parse(comment.postedAt) >= thirtyDaysAgoMs) {
+      if (Date.parse(comment.postedAt) >= windowStartMs) {
         rows.push(deliveryEvent(post, "comment", comment, sequence[0]?.draft ?? ""));
       }
       const reply = comment.replyDelivery;
-      if (reply && Date.parse(reply.postedAt) >= thirtyDaysAgoMs) {
+      if (reply && Date.parse(reply.postedAt) >= windowStartMs) {
         rows.push(deliveryEvent(post, "reply", reply, sequence[1]?.draft ?? ""));
       }
       return rows;
@@ -77,7 +85,10 @@ export function buildTapInActivitySnapshot(input: {
     .filter((event) => Number.isFinite(Date.parse(event.postedAt)))
     .sort((left, right) => right.postedAt.localeCompare(left.postedAt));
 
-  const pendingReplyTimes = input.pendingReplyPosts
+  const pendingReplyPosts = input.pendingReplyPosts.filter(
+    (post) => validTimestamp(post.pendingReply?.createdAt) >= windowStartMs
+  );
+  const pendingReplyTimes = pendingReplyPosts
     .map((post) => post.pendingReply?.scheduledAt ?? "")
     .filter((value) => Number.isFinite(Date.parse(value)))
     .sort((left, right) => left.localeCompare(right));
@@ -93,7 +104,7 @@ export function buildTapInActivitySnapshot(input: {
       last24Hours,
       comments30Days: events.filter((event) => event.kind === "comment").length,
       replies30Days: events.filter((event) => event.kind === "reply").length,
-      repliesWaiting: input.pendingReplyPosts.length,
+      repliesWaiting: pendingReplyPosts.length,
     },
     events: events.slice(0, 20),
   };

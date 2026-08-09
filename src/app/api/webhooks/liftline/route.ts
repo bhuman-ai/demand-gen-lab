@@ -145,9 +145,10 @@ export async function POST(request: Request) {
     DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
   ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
   const campaignType = youtubeRoles.campaignType === "comment" ? "comment" : "thread";
-  const cancelledReplyCount = campaignType === "comment"
-    ? await clearSocialDiscoveryPendingRepliesForBrand(brandId)
-    : 0;
+  // Pending replies belong to the campaign configuration that created them.
+  // Clear them on every activation so a newly selected brand can never inherit
+  // a scheduled reply from the previous campaign.
+  const cancelledReplyCount = await clearSocialDiscoveryPendingRepliesForBrand(brandId);
 
   if (active && youtubeConnected && platforms.includes("youtube")) {
     try {
@@ -220,7 +221,7 @@ export async function POST(request: Request) {
         label: "Reply schedule",
         detail: campaignType === "comment"
           ? `${cancelledReplyCount} stale ${cancelledReplyCount === 1 ? "reply" : "replies"} cancelled`
-          : "Replies use a different account 1–6 hours later",
+          : `${cancelledReplyCount} stale ${cancelledReplyCount === 1 ? "reply" : "replies"} cancelled; new replies use another account 1–6 hours later`,
         time: "Ready",
       },
       {

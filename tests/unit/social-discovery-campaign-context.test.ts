@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { BrandRecord } from "../../src/lib/factory-types";
-import { socialDiscoveryCampaignBrand } from "../../src/lib/social-discovery-campaign-context";
+import {
+  socialDiscoveryCampaignBrand,
+  tapInPreviewCampaignBrand,
+} from "../../src/lib/social-discovery-campaign-context";
 import { buildScoredSocialDiscoveryPost } from "../../src/lib/social-discovery";
 import { isEligibleYouTubeDiscoveryPost } from "../../src/lib/social-discovery-youtube-search";
 
@@ -59,6 +62,28 @@ test("TapIn runtime context replaces the seed brand identity without changing ow
 test("non-TapIn social discovery brands are unchanged", () => {
   const source = brand({ socialDiscoveryCommentPrompt: "Brand name: Another Brand" });
   assert.equal(socialDiscoveryCampaignBrand(source), source);
+});
+
+test("TapIn preview isolates the draft campaign before it is saved", () => {
+  const source = brand({
+    name: "BHuman",
+    product: "personalized video",
+    targetMarkets: ["sales outreach"],
+    keyFeatures: ["AI presenter"],
+  });
+
+  const campaign = tapInPreviewCampaignBrand(source, {
+    campaignName: "Olyvv · Recipe discovery",
+    targets: ["weeknight dinners", "meal planning"],
+  });
+
+  assert.equal(campaign.id, source.id);
+  assert.equal(campaign.name, "Olyvv");
+  assert.equal(campaign.product, "weeknight dinners, meal planning");
+  assert.deepEqual(campaign.socialDiscoveryQueries, ["weeknight dinners", "meal planning"]);
+  assert.deepEqual(campaign.targetMarkets, ["weeknight dinners", "meal planning"]);
+  assert.deepEqual(campaign.keyFeatures, []);
+  assert.equal(campaign.website, "");
 });
 
 test("strong personalized-marketing content is target grade for the BHuman campaign", () => {

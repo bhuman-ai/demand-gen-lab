@@ -106,6 +106,45 @@ test("TapIn preview retries polished mini-essays", async () => {
   }
 });
 
+test("TapIn preview retries a misspelled or undisclosed brand reply", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  let requestCount = 0;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    const content = requestCount === 1
+      ? {
+          openingComment: "ranking with barely any content is wild",
+          reply: "yeah clusterseoul verifies what actually works",
+        }
+      : {
+          openingComment: "ranking with barely any content is wild",
+          reply: "i work on ClusterSEO, this problem comes up nonstop",
+        };
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "ClusterSEO",
+      openingPrompt: "React naturally.",
+      replyPrompt: "Mention ClusterSEO.",
+      videoTitle: "SEO best practices we ignore",
+      videoDescription: "Why the same checklist does not work on every site.",
+    });
+    assert.equal(requestCount, 2);
+    assert.equal(preview.reply, "i work on ClusterSEO, this problem comes up nonstop");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
 test("comment-only preview does not require or return a reply", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;

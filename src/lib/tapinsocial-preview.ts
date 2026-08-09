@@ -7,6 +7,7 @@ import {
   YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
   youtubeBrandAffiliationProblem,
   youtubeCommentStyleProblem,
+  youtubeExactBrandMentionProblem,
 } from "@/lib/youtube-comment-style";
 
 export type TapInThreadPreviewInput = {
@@ -68,6 +69,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     `- ${SOCIAL_COMMENT_PUNCTUATION_RULE}`,
     "- Apply only the reply prompt to reply.",
     "- Reply directly to openingComment as a different account.",
+    `- Mention the brand exactly as written: ${compact(input.brandName, 160)}.`,
     "- If the brand is mentioned, identify the affiliation in first person, for example 'i work on [brand]'. Never pose as an independent customer.",
     "- Never invent usage, results, customer experience, or unsupported product claims.",
     "- Keep it concise and natural; do not include a link unless the opening comment explicitly asks for one.",
@@ -128,6 +130,9 @@ export async function generateTapInThreadPreview(
     lastProblem = youtubeCommentStyleProblem(openingComment, "opening");
     if (!lastProblem && !commentOnly) {
       lastProblem = youtubeCommentStyleProblem(reply, "reply");
+    }
+    if (!lastProblem && !commentOnly) {
+      lastProblem = youtubeExactBrandMentionProblem(reply, input.brandName);
     }
     if (!lastProblem) {
       lastProblem = youtubeBrandAffiliationProblem(openingComment, input.brandName) ||

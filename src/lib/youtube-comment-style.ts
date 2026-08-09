@@ -11,6 +11,7 @@ export const YOUTUBE_NATIVE_COMMENT_STYLE_RULES = [
   "- Do not use semicolons, headings, bullets, marketing language, or polished bridge phrases.",
   "- Avoid AI-sounding openings such as 'Really appreciated the point', 'This is spot on', 'What really stood out', and 'It makes sense that'.",
   "- Avoid salesy phrases such as 'tools like', 'game changer', 'valuable insights', 'great breakdown', and 'if you are serious about'.",
+  "- If a brand is required, disclose the affiliation and relate it to the viewer's problem. Do not explain the product's features, benefits, or superiority.",
   "- Texture examples only, do not copy: '3 hours is wild lol', 'wait does that actually work?', 'that testing point got me', 'appreciate this'.",
 ].join("\n");
 
@@ -23,6 +24,10 @@ const FORMAL_OR_SALESY_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "sales qualification", pattern: /\bif you(?:'re| are) serious about\b/i },
   { label: "salesy tool bridge", pattern: /\btools like\b/i },
   { label: "marketing cliché", pattern: /\b(?:game[ -]?changer|valuable insights?|great breakdown)\b/i },
+  { label: "marketing cliché", pattern: /\bchanges everything\b/i },
+  { label: "brand-copy rationale", pattern: /\bthis is exactly why we\b/i },
+  { label: "product pitch", pattern: /\bwe (?:focus on|help|enable|empower|provide|offer)\b/i },
+  { label: "product pitch", pattern: /\b(?:verifies?|helps? (?:you|people|teams|brands)|makes? it (?:easy|easier))\b/i },
 ];
 
 function wordCount(value: string) {
@@ -72,4 +77,12 @@ export function youtubeBrandAffiliationProblem(value: unknown, brandName: string
     return "";
   }
   return `mentions ${brand} without plainly identifying the affiliation`;
+}
+
+export function youtubeExactBrandMentionProblem(value: unknown, brandName: string) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const brand = String(brandName ?? "").replace(/\s+/g, " ").trim();
+  if (!brand) return "brand name is empty";
+  if (new RegExp(`\\b${escapeRegExp(brand)}\\b`, "i").test(text)) return "";
+  return `does not mention ${brand} exactly`;
 }

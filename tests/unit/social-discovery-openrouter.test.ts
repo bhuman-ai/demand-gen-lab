@@ -103,8 +103,8 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
       headline: "Relevant personalization discussion",
       fitSummary: "The video directly discusses personalized outreach.",
       shouldComment: true,
-      commentDraft: "personalization without sounding robotic is the hard part tbh",
-      replyDraft: "we use BHuman for this and it has been solid",
+      commentDraft: "personalization without sounding robotic is the hard part—especially at scale",
+      replyDraft: "we use BHuman for this—and it has been solid",
       assetNeeded: "",
       riskNotes: [],
       exitRules: [],
@@ -121,7 +121,11 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
     assert.equal(requests.length, 1);
     assert.equal(requests[0]?.url, "https://openrouter.ai/api/v1/chat/completions");
     assert.equal(drafted.interactionPlan.sequence.length, 2);
-    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "we use BHuman for this and it has been solid");
+    assert.equal(
+      drafted.interactionPlan.sequence[0]?.draft,
+      "personalization without sounding robotic is the hard part, especially at scale"
+    );
+    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "we use BHuman for this, and it has been solid");
     assert.equal(drafted.interactionPlan.generationPromptMode, "auto");
   } finally {
     globalThis.fetch = originalFetch;
@@ -130,6 +134,16 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
     if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalOpenAiKey;
   }
+});
+
+test("social comment prompt explicitly bans long dashes", () => {
+  const prompt = buildSocialCommentPlanningPrompt({
+    brand: brand(),
+    post: post(),
+    force: true,
+    mode: "solo",
+  });
+  assert.match(prompt, /Never use em dashes or en dashes/i);
 });
 
 test("forced TapIn generation surfaces OpenRouter failures instead of reusing a stale draft", async () => {

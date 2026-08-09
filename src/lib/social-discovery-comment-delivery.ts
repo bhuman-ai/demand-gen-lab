@@ -26,6 +26,7 @@ import type {
   SocialDiscoveryPromotionDraft,
   SocialDiscoveryPromotionPurchase,
 } from "@/lib/social-discovery-types";
+import { sanitizeSocialCommentText } from "@/lib/social-comment-text";
 
 type ResolvedAccount = {
   id: string;
@@ -208,6 +209,10 @@ async function deliverPlatformComment(input: {
   resolvedAccount: ResolvedAccount;
   requestedCommentId?: string;
 }) {
+  const text = sanitizeSocialCommentText(input.text);
+  if (!text) {
+    throw new SocialCommentDeliveryError("Comment text is empty after safety cleanup.", { status: 400 });
+  }
   let platformResult:
     | Awaited<ReturnType<typeof sendUnipilePostComment>>
     | Awaited<ReturnType<typeof sendYouTubeVideoComment>>;
@@ -228,7 +233,7 @@ async function deliverPlatformComment(input: {
     }
     const youtubeResult = await sendYouTubeVideoComment({
       post: input.post,
-      text: input.text,
+      text,
       secrets,
       commentId: input.requestedCommentId,
     });
@@ -242,7 +247,7 @@ async function deliverPlatformComment(input: {
     const unipileResult = await sendUnipilePostComment({
       post: input.post,
       accountId: input.account.config.social.externalAccountId.trim(),
-      text: input.text,
+      text,
       commentId: input.requestedCommentId,
     });
     platformResult = unipileResult;
@@ -424,7 +429,7 @@ export async function deliverSocialDiscoveryComment(input: {
       }
     | undefined;
 
-  const replyText = String(input.replyText ?? "").trim();
+  const replyText = sanitizeSocialCommentText(input.replyText);
   const replyAccountId = String(input.replyAccountId ?? "").trim();
   if (replyText) {
     if (!replyAccountId) {

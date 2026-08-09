@@ -9,6 +9,10 @@ import {
   textMentionsBrand,
 } from "@/lib/social-discovery-brand-mention";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
+import {
+  sanitizeSocialCommentText,
+  SOCIAL_COMMENT_PUNCTUATION_RULE,
+} from "@/lib/social-comment-text";
 import { CURRENT_SOCIAL_DISCOVERY_PLATFORMS } from "@/lib/social-platform-catalog";
 import type {
   SocialDiscoveryIntent,
@@ -2083,6 +2087,7 @@ export function buildSocialCommentPlanningPrompt(input: {
       : "You are designing one standalone top-level comment only.",
     "Use the following campaign instructions for commentDraft and, in thread mode, replyDraft:",
     brandCommentPrompt,
+    SOCIAL_COMMENT_PUNCTUATION_RULE,
     forceDraft
       ? `Selected-video mode: mention ${brandName} exactly once, casually, inside the real reaction to the video. ${brandName} must be present, but it should feel incidental, not promotional.`
       : "",
@@ -2224,8 +2229,8 @@ async function enhanceInteractionPlanWithLlm(
     let promptUsed = prompt;
     let row = await requestSocialCommentPlan({ prompt: promptUsed });
 
-    let initialCommentDraft = compactText(row.commentDraft, 280);
-    let initialReplyDraft = compactText(row.replyDraft, 220);
+    let initialCommentDraft = compactText(sanitizeSocialCommentText(row.commentDraft), 280);
+    let initialReplyDraft = compactText(sanitizeSocialCommentText(row.replyDraft), 220);
     let rowShouldComment = row.shouldComment === false ? false : true;
     const initialProblem = rowShouldComment
       ? youtubeForceDraftProblem({
@@ -2251,8 +2256,8 @@ async function enhanceInteractionPlanWithLlm(
         "Do not use a reusable template. Return JSON only.",
       ].join("\n");
       row = await requestSocialCommentPlan({ prompt: promptUsed });
-      initialCommentDraft = compactText(row.commentDraft, 280);
-      initialReplyDraft = compactText(row.replyDraft, 220);
+      initialCommentDraft = compactText(sanitizeSocialCommentText(row.commentDraft), 280);
+      initialReplyDraft = compactText(sanitizeSocialCommentText(row.replyDraft), 220);
       rowShouldComment = row.shouldComment === false ? false : true;
     }
 
@@ -2326,6 +2331,8 @@ async function enhanceInteractionPlanWithLlm(
             seed: `${input.post.id}:${input.post.url}:reply`,
           })
         : baseReplyDraft;
+    const finalCommentDraft = sanitizeSocialCommentText(nextCommentDraft);
+    const finalReplyDraft = sanitizeSocialCommentText(nextReplyDraft);
 
     return {
       ...input.post,
@@ -2338,13 +2345,13 @@ async function enhanceInteractionPlanWithLlm(
         assetNeeded,
         riskNotes: riskNotes.length ? riskNotes : plan.riskNotes,
         exitRules: exitRules.length ? exitRules : plan.exitRules,
-        targetStrength: shouldComment && nextCommentDraft ? "target" : "watch",
-        commentPosture: shouldComment && nextCommentDraft
+        targetStrength: shouldComment && finalCommentDraft ? "target" : "watch",
+        commentPosture: shouldComment && finalCommentDraft
           ? plan.commentPosture === "watch_only" || plan.commentPosture === "no_comment"
             ? "method_first"
             : plan.commentPosture
           : "watch_only",
-        sequence: shouldComment && nextCommentDraft
+        sequence: shouldComment && finalCommentDraft
           ? [
               {
                 ...(plan.sequence[0] ?? {
@@ -2352,9 +2359,9 @@ async function enhanceInteractionPlanWithLlm(
                   timing: "0-30 min after approval",
                   move: plan.commentPosture,
                 }),
-                draft: nextCommentDraft,
+                draft: finalCommentDraft,
               },
-              ...(nextReplyDraft
+              ...(finalReplyDraft
                 ? [
                     {
                       ...(plan.sequence[1] ?? {
@@ -2362,7 +2369,7 @@ async function enhanceInteractionPlanWithLlm(
                         timing: "2-10 min after the first comment",
                         move: "second_account_reply",
                       }),
-                      draft: nextReplyDraft,
+                      draft: finalReplyDraft,
                     },
                   ]
                 : []),

@@ -3,6 +3,7 @@ import { getBrandById, updateBrand } from "@/lib/factory-data";
 import { getTapInWorkspaceForUser, saveTapInYouTubeRoles } from "@/lib/tapinsocial-auth";
 import { campaignBrandName } from "@/lib/social-discovery-campaign-context";
 import { clearSocialDiscoveryPendingRepliesForBrand } from "@/lib/social-discovery-data";
+import { SOCIAL_COMMENT_PUNCTUATION_RULE } from "@/lib/social-comment-text";
 import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
   normalizeSocialDiscoveryYouTubePolicy,
@@ -64,6 +65,7 @@ function contextualCommentPrompt(input: {
       : "Campaign type: Comment only. Do not generate or schedule a reply.",
     input.campaignType === "thread" ? input.delayedReplyPrompt : "",
     "Runtime context:",
+    `- ${SOCIAL_COMMENT_PUNCTUATION_RULE}`,
     "- TapIn supplies the matched YouTube video title and description to the generator automatically.",
     "- Opening comment instructions apply only to commentDraft.",
     "- Delayed reply instructions apply only to replyDraft.",

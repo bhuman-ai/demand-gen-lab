@@ -96,6 +96,13 @@ function noMatchResponse(discovery: Awaited<ReturnType<typeof discoverYouTubeSea
   );
 }
 
+function everyYouTubeQueryFailed(
+  discovery: Awaited<ReturnType<typeof discoverYouTubeSearchPostsForBrand>>
+) {
+  return discovery.queryStats.length > 0 &&
+    discovery.queryStats.every((query) => Boolean(query.error));
+}
+
 export async function POST(request: Request) {
   const expected = expectedSecret();
   if (!expected || suppliedSecret(request) !== expected) {
@@ -147,14 +154,25 @@ export async function POST(request: Request) {
         DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
       ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
       const youtubeSearchSecrets = await workspaceYouTubeSearchSecrets(workspace);
-      const discovery = await discoverYouTubeSearchPostsForBrand({
+      const discoveryInput = {
         brand: campaignBrand,
-        queries: targets.slice(0, 4),
+        // A YouTube search costs 100 quota units. One representative target is
+        // enough for a preview; live discovery still rotates the full target set.
+        queries: targets.slice(0, 1),
         maxResults: 8,
         secrets: youtubeSearchSecrets ?? undefined,
-        preferApiKey: !youtubeSearchSecrets,
         policy: youtubeDiscoveryPolicy,
+      };
+      let discovery = await discoverYouTubeSearchPostsForBrand({
+        ...discoveryInput,
+        preferApiKey: true,
       });
+      if (youtubeSearchSecrets && everyYouTubeQueryFailed(discovery)) {
+        discovery = await discoverYouTubeSearchPostsForBrand({
+          ...discoveryInput,
+          preferApiKey: false,
+        });
+      }
       const matchedVideo = discovery.posts[0];
       if (!matchedVideo) {
         return noMatchResponse(discovery);

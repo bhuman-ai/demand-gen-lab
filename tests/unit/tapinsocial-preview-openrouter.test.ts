@@ -66,6 +66,42 @@ test("TapIn preview uses OpenRouter directly", async () => {
   }
 });
 
+test("TapIn preview preserves a valid casual reply beyond the old 150-character cutoff", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  const reply = "seo feels impossible lately. i work on ClusterSEO and tiktok links have been oddly decent, but everywhere else feels completely dead. anyone seeing something different?";
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            openingComment: "seo is rough lately. anyone actually seeing consistent results?",
+            reply,
+          }),
+        },
+      }],
+    }),
+    { status: 200, headers: { "content-type": "application/json" } }
+  );
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "ClusterSEO",
+      openingPrompt: "React naturally.",
+      replyPrompt: "Mention ClusterSEO as an aside.",
+      videoTitle: "SEO is getting harder",
+      videoDescription: "A discussion about unpredictable search results.",
+    });
+    assert.ok(reply.length > 150);
+    assert.equal(preview.reply, reply);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
 test("TapIn preview retries polished mini-essays", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;

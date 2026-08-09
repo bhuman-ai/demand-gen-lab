@@ -29,6 +29,10 @@ function compact(value: unknown, maxLength: number) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+function normalizeGeneratedComment(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
 export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
   if (input.campaignType === "comment") {
     return [
@@ -127,8 +131,8 @@ export async function generateTapInThreadPreview(
     });
 
     const parsed = JSON.parse(result.text) as Record<string, unknown>;
-    const openingComment = compact(sanitizeSocialCommentText(parsed.openingComment), 180);
-    const reply = compact(sanitizeSocialCommentText(parsed.reply), 150);
+    const openingComment = normalizeGeneratedComment(sanitizeSocialCommentText(parsed.openingComment));
+    const reply = normalizeGeneratedComment(sanitizeSocialCommentText(parsed.reply));
     lastProblem = youtubeCommentStyleProblem(openingComment, "opening");
     if (!lastProblem && !commentOnly) {
       lastProblem = youtubeCommentStyleProblem(reply, "reply");

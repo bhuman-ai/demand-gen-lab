@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  normalizeYouTubeCommentCapitalization,
   youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
@@ -14,10 +15,23 @@ test("accepts short native YouTube comments and replies", () => {
 });
 
 test("accepts an off-the-cuff topic-first brand aside", () => {
-  const comment = "seo feels brutal lately. i work on ClusterSEO and tiktok links have been weirdly decent. anyone else seeing that?";
+  const comment = "seo feels brutal lately. I work on ClusterSEO and tiktok links have been weirdly decent. Anyone else seeing that?";
   assert.equal(youtubeCommentStyleProblem(comment, "reply"), "");
   assert.equal(youtubeBrandAffiliationProblem(comment, "ClusterSEO"), "");
   assert.equal(youtubeBrandIsIncidentalProblem(comment, "ClusterSEO"), "");
+});
+
+test("normalizes the try-hard lowercase I and sentence starts", () => {
+  assert.equal(
+    normalizeYouTubeCommentCapitalization(
+      "seo feels brutal lately. i work on ClusterSEO and results are weird. anyone else seeing that?"
+    ),
+    "seo feels brutal lately. I work on ClusterSEO and results are weird. Anyone else seeing that?"
+  );
+  assert.match(
+    youtubeCommentStyleProblem("seo feels brutal lately. i work on ClusterSEO", "reply"),
+    /lowercase standalone I/i
+  );
 });
 
 test("rejects polished mini-essays and sales bridges", () => {
@@ -33,7 +47,7 @@ test("rejects polished mini-essays and sales bridges", () => {
     /salesy tool bridge/i
   );
   assert.match(
-    youtubeCommentStyleProblem("i work on ClusterSEO and this is exactly why we focus on verified results", "reply"),
+    youtubeCommentStyleProblem("I work on ClusterSEO and this is exactly why we focus on verified results", "reply"),
     /brand-copy rationale/i
   );
 });
@@ -66,7 +80,7 @@ test("rejects a brand-first recommendation even when affiliation is disclosed", 
     /before the broader topic/i
   );
   assert.match(
-    youtubeCommentStyleProblem("seo is rough lately. you should try ClusterSEO", "reply"),
+    youtubeCommentStyleProblem("seo is rough lately. You should try ClusterSEO", "reply"),
     /direct recommendation/i
   );
 });
@@ -74,13 +88,13 @@ test("rejects a brand-first recommendation even when affiliation is disclosed", 
 test("rejects product-copy conclusions inside otherwise casual replies", () => {
   assert.match(
     youtubeCommentStyleProblem(
-      "testing beats theory. i work on ClusterSEO and we see this constantly, verified recommendations beat generic playbooks",
+      "testing beats theory. I work on ClusterSEO and we see this constantly, verified recommendations beat generic playbooks",
       "reply"
     ),
     /product jargon|canned brand proof/i
   );
   assert.match(
-    youtubeCommentStyleProblem("seo is rough. i work on ClusterSEO and this tool beats everything else", "reply"),
+    youtubeCommentStyleProblem("seo is rough. I work on ClusterSEO and this tool beats everything else", "reply"),
     /competitive product claim/i
   );
 });

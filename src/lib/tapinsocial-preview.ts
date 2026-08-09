@@ -5,6 +5,7 @@ import {
 } from "@/lib/social-comment-text";
 import {
   YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
+  normalizeYouTubeCommentCapitalization,
   youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
@@ -131,8 +132,12 @@ export async function generateTapInThreadPreview(
     });
 
     const parsed = JSON.parse(result.text) as Record<string, unknown>;
-    const openingComment = normalizeGeneratedComment(sanitizeSocialCommentText(parsed.openingComment));
-    const reply = normalizeGeneratedComment(sanitizeSocialCommentText(parsed.reply));
+    const openingComment = normalizeGeneratedComment(
+      normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(parsed.openingComment))
+    );
+    const reply = normalizeGeneratedComment(
+      normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(parsed.reply))
+    );
     lastProblem = youtubeCommentStyleProblem(openingComment, "opening");
     if (!lastProblem && !commentOnly) {
       lastProblem = youtubeCommentStyleProblem(reply, "reply");

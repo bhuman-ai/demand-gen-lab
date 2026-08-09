@@ -23,6 +23,7 @@ import type {
 import { resolveUnipilePostContext, type UnipileResolvedPostContext } from "@/lib/unipile";
 import {
   YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
+  normalizeYouTubeCommentCapitalization,
   youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
@@ -2248,8 +2249,14 @@ async function enhanceInteractionPlanWithLlm(
     let promptUsed = prompt;
     let row = await requestSocialCommentPlan({ prompt: promptUsed });
 
-    let initialCommentDraft = compactText(sanitizeSocialCommentText(row.commentDraft), 280);
-    let initialReplyDraft = compactText(sanitizeSocialCommentText(row.replyDraft), 220);
+    let initialCommentDraft = compactText(
+      normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(row.commentDraft)),
+      280
+    );
+    let initialReplyDraft = compactText(
+      normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(row.replyDraft)),
+      220
+    );
     let rowShouldComment = row.shouldComment === false ? false : true;
     const initialProblem = rowShouldComment
       ? youtubeDraftProblem({
@@ -2278,8 +2285,14 @@ async function enhanceInteractionPlanWithLlm(
         "Do not use a reusable template. Return JSON only.",
       ].join("\n");
       row = await requestSocialCommentPlan({ prompt: promptUsed });
-      initialCommentDraft = compactText(sanitizeSocialCommentText(row.commentDraft), 280);
-      initialReplyDraft = compactText(sanitizeSocialCommentText(row.replyDraft), 220);
+      initialCommentDraft = compactText(
+        normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(row.commentDraft)),
+        280
+      );
+      initialReplyDraft = compactText(
+        normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(row.replyDraft)),
+        220
+      );
       rowShouldComment = row.shouldComment === false ? false : true;
     }
 

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getBrandById, updateBrand } from "@/lib/factory-data";
 import { getTapInWorkspaceForUser, saveTapInYouTubeRoles } from "@/lib/tapinsocial-auth";
 import { campaignBrandName } from "@/lib/social-discovery-campaign-context";
+import { clearSocialDiscoveryPendingRepliesForBrand } from "@/lib/social-discovery-data";
 import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
   normalizeSocialDiscoveryYouTubePolicy,
@@ -144,6 +145,9 @@ export async function POST(request: Request) {
     DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
   ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
   const campaignType = youtubeRoles.campaignType === "comment" ? "comment" : "thread";
+  const cancelledReplyCount = campaignType === "comment"
+    ? await clearSocialDiscoveryPendingRepliesForBrand(brandId)
+    : 0;
 
   if (active && youtubeConnected && platforms.includes("youtube")) {
     try {
@@ -211,6 +215,13 @@ export async function POST(request: Request) {
         label: "Watching relevant conversations",
         detail: targets.slice(0, 3).join(", ") || "Campaign targets saved",
         time: "Now",
+      },
+      {
+        label: "Reply schedule",
+        detail: campaignType === "comment"
+          ? `${cancelledReplyCount} stale ${cancelledReplyCount === 1 ? "reply" : "replies"} cancelled`
+          : "Replies use a different account 1–6 hours later",
+        time: "Ready",
       },
       {
         label: "Contextual mention policy",

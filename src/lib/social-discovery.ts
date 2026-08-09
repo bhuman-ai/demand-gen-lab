@@ -24,6 +24,7 @@ import { resolveUnipilePostContext, type UnipileResolvedPostContext } from "@/li
 import {
   YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
   youtubeBrandAffiliationProblem,
+  youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
 } from "@/lib/youtube-comment-style";
 
@@ -2106,10 +2107,11 @@ export function buildSocialCommentPlanningPrompt(input: {
       ? [
           YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
           "- Allowed shapes: quick agreement, quick disagreement, one question, one clarification, one tiny takeaway, one request, one example.",
-          "- Pick one shape only. Do not combine praise + insight + brand bridge.",
+          "- Keep one conversational thread. When the brand is required, a topic reaction + small disclosed aside + optional question is one valid shape. Never combine praise + recap + pitch.",
           "- Do not sound like you are trying to teach the audience or summarize the whole video.",
           `- ${forceDraft ? `Mention ${brandName} exactly once and keep it incidental and ordinary.` : contextualMentionRule}`,
           `- If ${brandName} is mentioned, identify the affiliation in first person. Never pose as an independent customer.`,
+          `- Put the broader topic first. ${brandName} must be a small aside inside an observation, frustration, uncertainty, or honest question, never the answer.`,
           "- Do not append a separate brand sentence. Do not turn the comment into a pitch.",
           "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
         ].join("\n")
@@ -2206,6 +2208,10 @@ function youtubeDraftProblem(input: {
     youtubeBrandAffiliationProblem(input.commentDraft, input.brandName) ||
     youtubeBrandAffiliationProblem(input.replyDraft, input.brandName);
   if (affiliationProblem) return affiliationProblem;
+  const incidentalProblem =
+    youtubeBrandIsIncidentalProblem(input.commentDraft, input.brandName) ||
+    youtubeBrandIsIncidentalProblem(input.replyDraft, input.brandName);
+  if (incidentalProblem) return incidentalProblem;
   if (!input.forceDraft) return "";
   const combinedDraft = [input.commentDraft, input.replyDraft].filter(Boolean).join("\n");
   const mentionCount = brandMentionCount(combinedDraft, input.brandName);
@@ -2264,6 +2270,7 @@ async function enhanceInteractionPlanWithLlm(
         YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
         `Mention ${brandName} exactly once, casually, inside the actual comment.`,
         `If ${brandName} is mentioned, identify the affiliation in first person.`,
+        `Start with the broader topic. Keep ${brandName} as a small aside and end with uncertainty or an honest question when natural.`,
         `${brandName} should be context, not conclusion.`,
         `Do not append a standalone ${brandName} sentence.`,
         `Do not explain what ${brandName} does unless the video directly calls for it.`,

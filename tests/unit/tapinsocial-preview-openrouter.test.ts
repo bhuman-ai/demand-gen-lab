@@ -17,7 +17,7 @@ test("TapIn preview prompt explicitly bans long dashes", () => {
   });
 
   assert.match(prompt, /Never use em dashes or en dashes/i);
-  assert.match(prompt, /hard maximum 28 words/i);
+  assert.match(prompt, /hard maximum 32 words/i);
   assert.match(prompt, /viewer typing quickly/i);
 });
 
@@ -37,7 +37,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
             message: {
               content: JSON.stringify({
                 openingComment: "personalization without sounding robotic is the hard part",
-                reply: "i work on BHuman, this is the exact headache we started with",
+                reply: "outreach still feels awkward lol. i work on BHuman and we started with this exact headache",
               }),
             },
           },
@@ -56,7 +56,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
       videoDescription: "How sales teams use personalized video without sounding robotic.",
     });
     assert.deepEqual(urls, ["https://openrouter.ai/api/v1/chat/completions"]);
-    assert.equal(preview.reply, "i work on BHuman, this is the exact headache we started with");
+    assert.equal(preview.reply, "outreach still feels awkward lol. i work on BHuman and we started with this exact headache");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -80,7 +80,7 @@ test("TapIn preview retries polished mini-essays", async () => {
         }
       : {
           openingComment: "copying the same seo checklist everywhere is so real lol",
-          reply: "i work on ClusterSEO, this exact problem comes up nonstop",
+          reply: "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop",
         };
     return new Response(
       JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
@@ -98,7 +98,7 @@ test("TapIn preview retries polished mini-essays", async () => {
     });
     assert.equal(requestCount, 2);
     assert.equal(preview.openingComment, "copying the same seo checklist everywhere is so real lol");
-    assert.equal(preview.reply, "i work on ClusterSEO, this exact problem comes up nonstop");
+    assert.equal(preview.reply, "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -120,7 +120,7 @@ test("TapIn preview retries a misspelled or undisclosed brand reply", async () =
         }
       : {
           openingComment: "ranking with barely any content is wild",
-          reply: "i work on ClusterSEO, this problem comes up nonstop",
+          reply: "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop",
         };
     return new Response(
       JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
@@ -137,7 +137,7 @@ test("TapIn preview retries a misspelled or undisclosed brand reply", async () =
       videoDescription: "Why the same checklist does not work on every site.",
     });
     assert.equal(requestCount, 2);
-    assert.equal(preview.reply, "i work on ClusterSEO, this problem comes up nonstop");
+    assert.equal(preview.reply, "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;

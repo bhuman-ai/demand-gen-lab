@@ -6,6 +6,7 @@ import {
 import {
   YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
   youtubeBrandAffiliationProblem,
+  youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeExactBrandMentionProblem,
 } from "@/lib/youtube-comment-style";
@@ -70,6 +71,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     "- Apply only the reply prompt to reply.",
     "- Reply directly to openingComment as a different account.",
     `- Mention the brand exactly as written: ${compact(input.brandName, 160)}.`,
+    "- Begin with the broader topic, frustration, observation, or uncertainty. The brand must feel like a small personal aside, never the answer or recommendation.",
     "- If the brand is mentioned, identify the affiliation in first person, for example 'i work on [brand]'. Never pose as an independent customer.",
     "- Never invent usage, results, customer experience, or unsupported product claims.",
     "- Keep it concise and natural; do not include a link unless the opening comment explicitly asks for one.",
@@ -137,6 +139,10 @@ export async function generateTapInThreadPreview(
     if (!lastProblem) {
       lastProblem = youtubeBrandAffiliationProblem(openingComment, input.brandName) ||
         youtubeBrandAffiliationProblem(reply, input.brandName);
+    }
+    if (!lastProblem) {
+      lastProblem = youtubeBrandIsIncidentalProblem(openingComment, input.brandName) ||
+        youtubeBrandIsIncidentalProblem(reply, input.brandName);
     }
     if (!lastProblem && openingComment && (commentOnly || reply)) {
       return { openingComment, reply };

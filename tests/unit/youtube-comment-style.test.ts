@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   youtubeBrandAffiliationProblem,
+  youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeExactBrandMentionProblem,
 } from "../../src/lib/youtube-comment-style";
@@ -10,6 +11,13 @@ import {
 test("accepts short native YouTube comments and replies", () => {
   assert.equal(youtubeCommentStyleProblem("3 hours is wild lol", "opening"), "");
   assert.equal(youtubeCommentStyleProblem("appreciate this", "reply"), "");
+});
+
+test("accepts an off-the-cuff topic-first brand aside", () => {
+  const comment = "seo feels brutal lately. i work on ClusterSEO and tiktok links have been weirdly decent. anyone else seeing that?";
+  assert.equal(youtubeCommentStyleProblem(comment, "reply"), "");
+  assert.equal(youtubeBrandAffiliationProblem(comment, "ClusterSEO"), "");
+  assert.equal(youtubeBrandIsIncidentalProblem(comment, "ClusterSEO"), "");
 });
 
 test("rejects polished mini-essays and sales bridges", () => {
@@ -49,5 +57,16 @@ test("requires the exact brand name in a brand reply", () => {
   assert.equal(
     youtubeExactBrandMentionProblem("i work on ClusterSEO, this problem comes up nonstop", "ClusterSEO"),
     ""
+  );
+});
+
+test("rejects a brand-first recommendation even when affiliation is disclosed", () => {
+  assert.match(
+    youtubeBrandIsIncidentalProblem("i work on ClusterSEO and seo is rough lately", "ClusterSEO"),
+    /before the broader topic/i
+  );
+  assert.match(
+    youtubeCommentStyleProblem("seo is rough lately. you should try ClusterSEO", "reply"),
+    /direct recommendation/i
   );
 });

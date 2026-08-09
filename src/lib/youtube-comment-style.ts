@@ -7,13 +7,14 @@ export const YOUTUBE_NATIVE_COMMENT_STYLE_RULES = [
   "- Reply: usually 4 to 22 words, hard maximum 30 words and three short sentences.",
   "- Start with the reaction. Skip polite setup, explanation, summary, lesson, and conclusion.",
   "- Stay on one conversational thread. A quick topic reaction, one personal aside, and a genuine question can coexist.",
-  "- Contractions, lowercase, light slang, and an occasional emoji are okay when they fit. Never force typos, slang, or emoji.",
+  "- Use natural capitalization. Always capitalize standalone 'I' and the first word after a sentence-ending period, question mark, or exclamation point.",
+  "- Contractions, light slang, and an occasional emoji are okay when they fit. Never force all-lowercase text, typos, slang, or emoji.",
   "- Do not use semicolons, headings, bullets, marketing language, or polished bridge phrases.",
   "- Avoid AI-sounding openings such as 'Really appreciated the point', 'This is spot on', 'What really stood out', and 'It makes sense that'.",
   "- Avoid salesy phrases such as 'tools like', 'game changer', 'valuable insights', 'great breakdown', and 'if you are serious about'.",
   "- If a brand is required, make it a minor aside rather than the point. Start with the broader topic, then disclose the affiliation naturally.",
   "- Never directly recommend the brand or explain its features, benefits, or superiority. Uncertainty and an honest question are better than a conclusion.",
-  "- Texture examples only, do not copy: '3 hours is wild lol', 'seo feels rough lately. i work on [brand] and even we see weird results. anyone else?', 'wait does that actually work?'.",
+  "- Texture examples only, do not copy: '3 hours is wild lol', 'seo feels rough lately. I work on [brand] and even we see weird results. Anyone else?', 'wait does that actually work?'.",
 ].join("\n");
 
 const FORMAL_OR_SALESY_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
@@ -61,10 +62,20 @@ export function youtubeCommentStyleProblem(value: unknown, role: YouTubeCommentR
   }
   if (sentenceCount(text) > 3) return `${role} has more than three sentences`;
   if (/[;:]/.test(text)) return `${role} uses formal punctuation`;
+  if (/\bi\b/.test(text)) return `${role} uses lowercase standalone I`;
+  if (/[.!?]\s+[a-z]/.test(text)) return `${role} starts a new sentence with lowercase text`;
 
   const formalPattern = FORMAL_OR_SALESY_PATTERNS.find(({ pattern }) => pattern.test(text));
   if (formalPattern) return `${role} uses ${formalPattern.label}`;
   return "";
+}
+
+export function normalizeYouTubeCommentCapitalization(value: unknown) {
+  return String(value ?? "")
+    .replace(/\bi\b/g, "I")
+    .replace(/([.!?]\s+)([a-z])/g, (_match, boundary: string, letter: string) =>
+      `${boundary}${letter.toUpperCase()}`
+    );
 }
 
 function escapeRegExp(value: string) {

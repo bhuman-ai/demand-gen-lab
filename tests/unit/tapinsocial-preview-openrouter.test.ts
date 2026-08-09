@@ -56,7 +56,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
       videoDescription: "How sales teams use personalized video without sounding robotic.",
     });
     assert.deepEqual(urls, ["https://openrouter.ai/api/v1/chat/completions"]);
-    assert.equal(preview.reply, "outreach still feels awkward lol. i work on BHuman and we started with this exact headache");
+    assert.equal(preview.reply, "outreach still feels awkward lol. I work on BHuman and we started with this exact headache");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -69,7 +69,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
 test("TapIn preview preserves a valid casual reply beyond the old 150-character cutoff", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
-  const reply = "seo feels impossible lately. i work on ClusterSEO and tiktok links have been oddly decent, but everywhere else feels completely dead. anyone seeing something different?";
+  const reply = "seo feels impossible lately. I work on ClusterSEO and tiktok links have been oddly decent, but everywhere else feels completely dead. Anyone seeing something different?";
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
   globalThis.fetch = async () => new Response(
     JSON.stringify({
@@ -134,7 +134,7 @@ test("TapIn preview retries polished mini-essays", async () => {
     });
     assert.equal(requestCount, 2);
     assert.equal(preview.openingComment, "copying the same seo checklist everywhere is so real lol");
-    assert.equal(preview.reply, "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop");
+    assert.equal(preview.reply, "seo feels random lately. I work on ClusterSEO and this problem comes up nonstop");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -173,7 +173,7 @@ test("TapIn preview retries a misspelled or undisclosed brand reply", async () =
       videoDescription: "Why the same checklist does not work on every site.",
     });
     assert.equal(requestCount, 2);
-    assert.equal(preview.reply, "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop");
+    assert.equal(preview.reply, "seo feels random lately. I work on ClusterSEO and this problem comes up nonstop");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;

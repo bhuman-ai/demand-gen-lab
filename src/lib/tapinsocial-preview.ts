@@ -1,4 +1,8 @@
 import { generateJsonWithLlm } from "@/lib/llm-json";
+import {
+  sanitizeSocialCommentText,
+  SOCIAL_COMMENT_PUNCTUATION_RULE,
+} from "@/lib/social-comment-text";
 
 export type TapInThreadPreviewInput = {
   campaignType?: "comment" | "thread";
@@ -26,6 +30,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
       "Return JSON only with exactly one string key: openingComment.",
       "",
       "Comment rules:",
+      `- ${SOCIAL_COMMENT_PUNCTUATION_RULE}`,
       "- Apply the opening prompt to openingComment.",
       "- React to one concrete point supported by the video title or description.",
       "- It must work as a natural standalone YouTube comment.",
@@ -44,6 +49,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     "Return JSON only with exactly two string keys: openingComment and reply.",
     "",
     "Opening comment rules:",
+    `- ${SOCIAL_COMMENT_PUNCTUATION_RULE}`,
     "- Apply only the opening prompt to openingComment.",
     "- React to one concrete point supported by the video title or description.",
     "- It must work as a natural standalone YouTube comment.",
@@ -51,6 +57,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     "- Keep it concise, conversational, and free of marketing language.",
     "",
     "Reply rules:",
+    `- ${SOCIAL_COMMENT_PUNCTUATION_RULE}`,
     "- Apply only the reply prompt to reply.",
     "- Reply directly to openingComment as a different account.",
     "- If the brand is mentioned, identify the affiliation plainly instead of posing as an independent customer.",
@@ -97,8 +104,8 @@ export async function generateTapInThreadPreview(
   });
 
   const parsed = JSON.parse(result.text) as Record<string, unknown>;
-  const openingComment = compact(parsed.openingComment, 280);
-  const reply = compact(parsed.reply, 280);
+  const openingComment = compact(sanitizeSocialCommentText(parsed.openingComment), 280);
+  const reply = compact(sanitizeSocialCommentText(parsed.reply), 280);
   if (!openingComment || (!commentOnly && !reply)) {
     throw new Error("Preview generation returned an incomplete thread.");
   }

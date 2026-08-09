@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { generateTapInThreadPreview } from "../../src/lib/tapinsocial-preview";
+import {
+  buildTapInPreviewPrompt,
+  generateTapInThreadPreview,
+} from "../../src/lib/tapinsocial-preview";
+
+test("TapIn preview prompt explicitly bans long dashes", () => {
+  const prompt = buildTapInPreviewPrompt({
+    campaignType: "comment",
+    brandName: "Gatekept",
+    openingPrompt: "React naturally.",
+    replyPrompt: "",
+    videoTitle: "Istanbul travel",
+    videoDescription: "A morning in Balat.",
+  });
+
+  assert.match(prompt, /Never use em dashes or en dashes/i);
+});
 
 test("TapIn preview uses OpenRouter directly", async () => {
   const originalFetch = globalThis.fetch;
@@ -53,7 +69,7 @@ test("comment-only preview does not require or return a reply", async () => {
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
   globalThis.fetch = async () => new Response(
-    JSON.stringify({ choices: [{ message: { content: JSON.stringify({ openingComment: "This workflow gets the personalization balance right." }) } }] }),
+    JSON.stringify({ choices: [{ message: { content: JSON.stringify({ openingComment: "This workflow gets the personalization balance right—the details matter." }) } }] }),
     { status: 200, headers: { "content-type": "application/json" } }
   );
 
@@ -66,7 +82,7 @@ test("comment-only preview does not require or return a reply", async () => {
       videoTitle: "Personalized outreach workflows",
       videoDescription: "A practical walkthrough.",
     });
-    assert.equal(preview.openingComment, "This workflow gets the personalization balance right.");
+    assert.equal(preview.openingComment, "This workflow gets the personalization balance right, the details matter.");
     assert.equal(preview.reply, "");
   } finally {
     globalThis.fetch = originalFetch;

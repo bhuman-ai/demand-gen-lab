@@ -33,7 +33,7 @@ export function socialDiscoveryCampaignBrand(brand: BrandRecord): BrandRecord {
   };
 }
 
-function campaignBrandName(value: string) {
+export function campaignBrandName(value: string) {
   return String(value ?? "")
     .split(/\s+[·—|]\s+/)[0]
     ?.trim() ?? "";

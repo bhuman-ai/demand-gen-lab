@@ -21,6 +21,11 @@ import type {
   SocialDiscoveryProvider,
 } from "@/lib/social-discovery-types";
 import { resolveUnipilePostContext, type UnipileResolvedPostContext } from "@/lib/unipile";
+import {
+  YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
+  youtubeBrandAffiliationProblem,
+  youtubeCommentStyleProblem,
+} from "@/lib/youtube-comment-style";
 
 type DiscoveryError = {
   platform: SocialDiscoveryPlatform;
@@ -2099,15 +2104,12 @@ export function buildSocialCommentPlanningPrompt(input: {
       : "",
     input.post.platform === "youtube"
       ? [
-          "YouTube realism bar:",
-          "- Match the texture of real YouTube comments under videos like this: shorter, looser, less polished, lower-stakes.",
-          "- Prefer one small reaction over a polished insight. One sentence is usually better than two.",
+          YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
           "- Allowed shapes: quick agreement, quick disagreement, one question, one clarification, one tiny takeaway, one request, one example.",
           "- Pick one shape only. Do not combine praise + insight + brand bridge.",
-          "- Do not sound like a marketer, strategist, founder, consultant, or brand writer.",
           "- Do not sound like you are trying to teach the audience or summarize the whole video.",
-          "- A little roughness is okay. The comment should feel like it was typed in under 20 seconds.",
           `- ${forceDraft ? `Mention ${brandName} exactly once and keep it incidental and ordinary.` : contextualMentionRule}`,
+          `- If ${brandName} is mentioned, identify the affiliation in first person. Never pose as an independent customer.`,
           "- Do not append a separate brand sentence. Do not turn the comment into a pitch.",
           "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
         ].join("\n")
@@ -2162,8 +2164,8 @@ export function buildSocialCommentPlanningPrompt(input: {
     `heuristic_target_strength: ${plan.targetStrength}`,
     `heuristic_posture: ${plan.commentPosture}`,
     `heuristic_mention_policy: ${plan.mentionPolicy}`,
-    `heuristic_comment: ${plan.sequence[0]?.draft || ""}`,
-    `heuristic_reply_comment: ${plan.sequence[1]?.draft || ""}`,
+    input.post.platform === "youtube" ? "" : `heuristic_comment: ${plan.sequence[0]?.draft || ""}`,
+    input.post.platform === "youtube" ? "" : `heuristic_reply_comment: ${plan.sequence[1]?.draft || ""}`,
   ].join("\n");
 }
 
@@ -2182,7 +2184,7 @@ async function requestSocialCommentPlan(input: {
   return asRecord(parseLooseJsonObject(result.text));
 }
 
-function youtubeForceDraftProblem(input: {
+function youtubeDraftProblem(input: {
   platform: SocialDiscoveryPlatform;
   forceDraft: boolean;
   draftMode: "solo" | "thread";
@@ -2190,10 +2192,21 @@ function youtubeForceDraftProblem(input: {
   commentDraft: string;
   replyDraft: string;
 }) {
-  if (!input.forceDraft || input.platform !== "youtube") return "";
+  if (input.platform !== "youtube") return "";
   if (input.draftMode === "thread" && !input.replyDraft.trim()) {
     return "missing replyDraft for thread mode";
   }
+  const openingStyleProblem = youtubeCommentStyleProblem(input.commentDraft, "opening");
+  if (openingStyleProblem) return openingStyleProblem;
+  if (input.draftMode === "thread") {
+    const replyStyleProblem = youtubeCommentStyleProblem(input.replyDraft, "reply");
+    if (replyStyleProblem) return replyStyleProblem;
+  }
+  const affiliationProblem =
+    youtubeBrandAffiliationProblem(input.commentDraft, input.brandName) ||
+    youtubeBrandAffiliationProblem(input.replyDraft, input.brandName);
+  if (affiliationProblem) return affiliationProblem;
+  if (!input.forceDraft) return "";
   const combinedDraft = [input.commentDraft, input.replyDraft].filter(Boolean).join("\n");
   const mentionCount = brandMentionCount(combinedDraft, input.brandName);
   if (mentionCount === 0) return `missing ${input.brandName}`;
@@ -2233,7 +2246,7 @@ async function enhanceInteractionPlanWithLlm(
     let initialReplyDraft = compactText(sanitizeSocialCommentText(row.replyDraft), 220);
     let rowShouldComment = row.shouldComment === false ? false : true;
     const initialProblem = rowShouldComment
-      ? youtubeForceDraftProblem({
+      ? youtubeDraftProblem({
           platform: input.post.platform,
           forceDraft: Boolean(options?.force),
           draftMode,
@@ -2248,7 +2261,9 @@ async function enhanceInteractionPlanWithLlm(
         "",
         `Regenerate from scratch because the previous draft failed: ${initialProblem}.`,
         "Make it shorter, rougher, and more ordinary.",
+        YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
         `Mention ${brandName} exactly once, casually, inside the actual comment.`,
+        `If ${brandName} is mentioned, identify the affiliation in first person.`,
         `${brandName} should be context, not conclusion.`,
         `Do not append a standalone ${brandName} sentence.`,
         `Do not explain what ${brandName} does unless the video directly calls for it.`,
@@ -2279,7 +2294,7 @@ async function enhanceInteractionPlanWithLlm(
       throw new Error("OpenRouter returned no replyDraft for a two-account thread.");
     }
     const finalProblem = shouldComment
-      ? youtubeForceDraftProblem({
+      ? youtubeDraftProblem({
           platform: input.post.platform,
           forceDraft,
           draftMode,

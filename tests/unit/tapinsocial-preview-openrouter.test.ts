@@ -17,6 +17,8 @@ test("TapIn preview prompt explicitly bans long dashes", () => {
   });
 
   assert.match(prompt, /Never use em dashes or en dashes/i);
+  assert.match(prompt, /hard maximum 28 words/i);
+  assert.match(prompt, /viewer typing quickly/i);
 });
 
 test("TapIn preview uses OpenRouter directly", async () => {
@@ -35,7 +37,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
             message: {
               content: JSON.stringify({
                 openingComment: "personalization without sounding robotic is the hard part",
-                reply: "we use BHuman for this and it has been solid",
+                reply: "i work on BHuman, this is the exact headache we started with",
               }),
             },
           },
@@ -54,13 +56,53 @@ test("TapIn preview uses OpenRouter directly", async () => {
       videoDescription: "How sales teams use personalized video without sounding robotic.",
     });
     assert.deepEqual(urls, ["https://openrouter.ai/api/v1/chat/completions"]);
-    assert.equal(preview.reply, "we use BHuman for this and it has been solid");
+    assert.equal(preview.reply, "i work on BHuman, this is the exact headache we started with");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
     if (originalOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = originalOpenAiKey;
+  }
+});
+
+test("TapIn preview retries polished mini-essays", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  let requestCount = 0;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    const content = requestCount === 1
+      ? {
+          openingComment: "Really appreciated the point about testing SEO tactics instead of blindly following checklists across every website and assuming the same best practices will always work in every situation.",
+          reply: "This is spot on. Tools like ClusterSEO can help serious marketers understand the gap between generic advice and useful recommendations.",
+        }
+      : {
+          openingComment: "copying the same seo checklist everywhere is so real lol",
+          reply: "i work on ClusterSEO, this exact problem comes up nonstop",
+        };
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "ClusterSEO",
+      openingPrompt: "React naturally.",
+      replyPrompt: "Mention ClusterSEO.",
+      videoTitle: "SEO best practices we ignore",
+      videoDescription: "Why the same checklist does not work on every site.",
+    });
+    assert.equal(requestCount, 2);
+    assert.equal(preview.openingComment, "copying the same seo checklist everywhere is so real lol");
+    assert.equal(preview.reply, "i work on ClusterSEO, this exact problem comes up nonstop");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
   }
 });
 

@@ -104,7 +104,7 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
       fitSummary: "The video directly discusses personalized outreach.",
       shouldComment: true,
       commentDraft: "personalization without sounding robotic is the hard part—especially at scale",
-      replyDraft: "we use BHuman for this—and it has been solid",
+      replyDraft: "i work on BHuman, this has been solid for us",
       assetNeeded: "",
       riskNotes: [],
       exitRules: [],
@@ -125,7 +125,7 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
       drafted.interactionPlan.sequence[0]?.draft,
       "personalization without sounding robotic is the hard part, especially at scale"
     );
-    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "we use BHuman for this, and it has been solid");
+    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "i work on BHuman, this has been solid for us");
     assert.equal(drafted.interactionPlan.generationPromptMode, "auto");
   } finally {
     globalThis.fetch = originalFetch;
@@ -144,6 +144,8 @@ test("social comment prompt explicitly bans long dashes", () => {
     mode: "solo",
   });
   assert.match(prompt, /Never use em dashes or en dashes/i);
+  assert.match(prompt, /hard maximum 28 words/i);
+  assert.doesNotMatch(prompt, /heuristic_comment:/i);
 });
 
 test("forced TapIn generation surfaces OpenRouter failures instead of reusing a stale draft", async () => {

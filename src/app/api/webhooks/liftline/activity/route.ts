@@ -30,6 +30,13 @@ function requiredText(value: unknown, maxLength: number) {
   return String(value ?? "").trim().slice(0, maxLength);
 }
 
+function optionalPastIsoDate(value: unknown, now: Date) {
+  const candidate = requiredText(value, 80);
+  const timestamp = Date.parse(candidate);
+  if (!candidate || !Number.isFinite(timestamp) || timestamp > now.getTime()) return "";
+  return new Date(timestamp).toISOString();
+}
+
 export async function POST(request: Request) {
   const expected = expectedSecret();
   if (!expected || suppliedSecret(request) !== expected) {
@@ -57,7 +64,11 @@ export async function POST(request: Request) {
   }
 
   const now = new Date();
-  const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const campaignStartedAt = optionalPastIsoDate(body.campaignStartedAt, now);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const since = new Date(
+    Math.max(thirtyDaysAgo.getTime(), Date.parse(campaignStartedAt) || 0)
+  ).toISOString();
   try {
     const [commentedPosts, pendingReplyPosts, runner] = await Promise.all([
       listSocialDiscoveryCommentedPostsSince({
@@ -73,6 +84,7 @@ export async function POST(request: Request) {
       enabled: brand.socialDiscoveryYouTubeAutoCommentEnabled && runner.live,
       commentedPosts,
       pendingReplyPosts,
+      campaignStartedAt,
       now,
     });
     return NextResponse.json({ ok: true, activity, runner });

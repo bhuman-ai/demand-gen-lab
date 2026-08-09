@@ -7,7 +7,7 @@ export const YOUTUBE_NATIVE_COMMENT_STYLE_RULES = [
   "- Reply: usually 4 to 22 words, hard maximum 30 words and three short sentences.",
   "- Start with the reaction. Skip polite setup, explanation, summary, lesson, and conclusion.",
   "- Stay on one conversational thread. A quick topic reaction, one personal aside, and a genuine question can coexist.",
-  "- Use natural capitalization. Always capitalize standalone 'I' and the first word after a sentence-ending period, question mark, or exclamation point.",
+  "- Use natural capitalization. Capitalize the opening word, standalone 'I', and the first word after a sentence-ending period, question mark, or exclamation point.",
   "- Contractions, light slang, and an occasional emoji are okay when they fit. Never force all-lowercase text, typos, slang, or emoji.",
   "- Do not use semicolons, headings, bullets, marketing language, or polished bridge phrases.",
   "- Avoid AI-sounding openings such as 'Really appreciated the point', 'This is spot on', 'What really stood out', and 'It makes sense that'.",
@@ -62,6 +62,7 @@ export function youtubeCommentStyleProblem(value: unknown, role: YouTubeCommentR
   }
   if (sentenceCount(text) > 3) return `${role} has more than three sentences`;
   if (/[;:]/.test(text)) return `${role} uses formal punctuation`;
+  if (/^[\s\"'([{]*[a-z]/.test(text)) return `${role} begins with lowercase text`;
   if (/\bi\b/.test(text)) return `${role} uses lowercase standalone I`;
   if (/[.!?]\s+[a-z]/.test(text)) return `${role} starts a new sentence with lowercase text`;
 
@@ -72,6 +73,9 @@ export function youtubeCommentStyleProblem(value: unknown, role: YouTubeCommentR
 
 export function normalizeYouTubeCommentCapitalization(value: unknown) {
   return String(value ?? "")
+    .replace(/^(\s*[\"'([{]*)([a-z])/, (_match, prefix: string, letter: string) =>
+      `${prefix}${letter.toUpperCase()}`
+    )
     .replace(/\bi\b/g, "I")
     .replace(/([.!?]\s+)([a-z])/g, (_match, boundary: string, letter: string) =>
       `${boundary}${letter.toUpperCase()}`

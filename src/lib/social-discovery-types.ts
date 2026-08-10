@@ -24,6 +24,16 @@ export type SocialDiscoveryIntent =
 
 export type SocialDiscoveryStatus = "new" | "triaged" | "saved" | "dismissed";
 
+export type SocialDiscoverySurfaceType =
+  | "help_request"
+  | "personal_story"
+  | "complaint_thread"
+  | "advice_post"
+  | "brand_feature_post"
+  | "awareness_post"
+  | "news_or_political"
+  | "generic";
+
 export type SocialDiscoveryCommentDelivery = {
   commentId: string;
   commentUrl: string;
@@ -125,6 +135,7 @@ export type SocialDiscoveryPost = {
 
 export type SocialDiscoveryInteractionPlan = {
   headline: string;
+  surfaceType?: SocialDiscoverySurfaceType;
   domainProfile?: string;
   fitSummary?: string;
   targetStrength?: "target" | "watch" | "skip";

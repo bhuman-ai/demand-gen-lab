@@ -63,6 +63,10 @@ export function isEligibleYouTubeDiscoveryPost(
   return true;
 }
 
+export function isEligibleYouTubePreviewFallbackPost(post: SocialDiscoveryPost) {
+  return post.interactionPlan.surfaceType !== "news_or_political";
+}
+
 function buildYouTubeDiscoveryPost(input: {
   brand: BrandRecord;
   query: string;
@@ -142,6 +146,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
   }) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
   const publishedAfter = isoHoursAgo(policy.maxVideoAgeHours);
   const posts: SocialDiscoveryPost[] = [];
+  const candidates: SocialDiscoveryPost[] = [];
   const errors: YouTubeDiscoveryError[] = [];
   const queryStats: YouTubeDiscoveryQueryStats[] = [];
   let found = 0;
@@ -174,6 +179,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
         )
         .filter((post): post is SocialDiscoveryPost => Boolean(post));
       const acceptedPosts = builtPosts.filter((post) => isEligibleYouTubeDiscoveryPost(post, policy));
+      candidates.push(...builtPosts.filter(isEligibleYouTubePreviewFallbackPost));
       posts.push(...acceptedPosts);
       queryStats.push({
         query,
@@ -207,6 +213,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
     platforms: ["youtube"] as const,
     queries,
     posts,
+    candidates,
     errors,
     queryStats,
     summary: {

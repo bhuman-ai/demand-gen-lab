@@ -1,25 +1,23 @@
 # Feature: tapin-prompt-fidelity
 
 ## Request
-Tighten the shipped TapIn prompt-fidelity fix after production verification: preserve every requested factual capability up to two (both AI persona QA and human tester recordings/fixes in the observed prompt), and reject/repair fabricated personal or customer experience such as 'same problem here' while retaining disclosed affiliation and fresh-eyes intent.
+Fix the production-discovered grounding contradiction: TapIn opening validation must accept support from the video title or description, validate reply safety and requested capability coverage before treating grounding as soft, and return the last complete safe prompt-faithful draft rather than unrelated deterministic fallback when only soft grounding remains.
 ## Autonomy Mode
 holistic_autopilot
 ## Target Users
 TapIn Social campaign operators
 ## Optimization Target
-Complete safe prompt fidelity
+Never discard a safe prompt-faithful preview for a soft grounding miss
 ## Hard Constraints
-- Include every explicitly requested factual capability up to two
-- Do not invent personal or customer experience
-- Keep disclosed brand affiliation and direct reply intent
+- Safety and requested capability coverage remain hard gates
+- Title or description can satisfy video grounding
+- Soft grounding alone must not trigger unrelated fallback
 ## Scope
 Optimize for Faithful, safe campaign prompt execution with no silent generic fallback. Start with smallest coherent slice that proves Fix TapIn Social campaign preview generation so opening and reply prompts are actually followed. Prompt-following drafts must not be rejected by conflicting generic style constraints and replaced with unrelated fallback copy. Preserve safety checks for false claims, but keep the requested topic, opening question/problem, reply intent, brand mention, and requested factual capability details..
 ## Touched Surfaces
-- TapIn Social campaign setup preview
-- TapIn Social live comment/thread generation
+- TapIn Social campaign preview generation
 ## Success Moment
-[TODO] Define exact user outcome that proves this feature works.
-
+TapIn Social campaign operators completes Fix the production-discovered grounding contradiction: TapIn opening validation must accept support from the video title or description, validate reply safety and requested capability coverage before treating grounding as soft, and return the last complete safe prompt-faithful draft rather than unrelated deterministic fallback when only soft grounding remains. and sees explicit confirmation of successful outcome.
 ## Failure Policy
 [TODO] Describe recovery path on failure.
 
@@ -43,6 +41,7 @@ Optimize for Faithful, safe campaign prompt execution with no silent generic fal
 
 ## Decisions
 - Scope: Optimize for Faithful, safe campaign prompt execution with no silent generic fallback. Start with smallest coherent slice that proves Fix TapIn Social campaign preview generation so opening and reply prompts are actually followed. Prompt-following drafts must not be rejected by conflicting generic style constraints and replaced with unrelated fallback copy. Preserve safety checks for false claims, but keep the requested topic, opening question/problem, reply intent, brand mention, and requested factual capability details.. (source: agent_assumption; why: Autopilot inferred default for feature_scope from request, audience, optimization target, and mode.)
+- Success Moment: TapIn Social campaign operators completes Fix the production-discovered grounding contradiction: TapIn opening validation must accept support from the video title or description, validate reply safety and requested capability coverage before treating grounding as soft, and return the last complete safe prompt-faithful draft rather than unrelated deterministic fallback when only soft grounding remains. and sees explicit confirmation of successful outcome. (source: agent_assumption; why: Autopilot inferred default for success_moment from request, audience, optimization target, and mode.)
 ## Open Questions
 [TODO] Track unresolved blockers here.
 
@@ -58,8 +57,14 @@ Optimize for Faithful, safe campaign prompt execution with no silent generic fal
 - Files: src/lib/youtube-comment-style.ts, src/lib/tapinsocial-preview.ts, src/lib/social-discovery.ts, tests/unit/youtube-comment-style.test.ts, tests/unit/tapinsocial-preview-openrouter.test.ts, tests/unit/social-discovery-openrouter.test.ts
 - Components: YouTube comment style validator, TapIn preview repair loop, TapIn live social comment planner
 - Assumptions used: Capability coverage checks are activated only for explicit terms present in the campaign instructions, Personal-experience rejection is TapIn-specific and does not change default non-TapIn validation
+- 2026-08-10 Implementation summary: Production grounding follow-up: preview grounding now accepts any concrete token from the video title or description, matching the stated contract. All hard gates (style, complete thread, requested capability coverage, exact brand, affiliation, and incidental placement) run before grounding. If repeated drafts pass every hard gate but miss only soft lexical grounding, TapIn returns the last safe prompt-faithful draft rather than unrelated deterministic fallback.
+- Files: src/lib/tapinsocial-preview.ts, tests/unit/tapinsocial-preview-openrouter.test.ts
+- Components: TapIn preview grounding validator, TapIn preview validation and fallback selection
+- Assumptions used: Lexical grounding is a soft quality signal after prompt fidelity and safety pass, Provider unavailability with no safe generated candidate still uses the deterministic video-grounded fallback
 ## Doc Sync
 - 2026-08-10 Synced after implementation.
 - Code touched: src/lib/tapinsocial-preview.ts, src/lib/youtube-comment-style.ts, src/lib/social-discovery.ts, tests/unit/tapinsocial-preview-openrouter.test.ts, tests/unit/youtube-comment-style.test.ts, tests/unit/social-discovery-openrouter.test.ts
 - 2026-08-10 Synced after implementation.
 - Code touched: src/lib/youtube-comment-style.ts, src/lib/tapinsocial-preview.ts, src/lib/social-discovery.ts, tests/unit/youtube-comment-style.test.ts, tests/unit/tapinsocial-preview-openrouter.test.ts, tests/unit/social-discovery-openrouter.test.ts
+- 2026-08-10 Synced after implementation.
+- Code touched: src/lib/tapinsocial-preview.ts, tests/unit/tapinsocial-preview-openrouter.test.ts

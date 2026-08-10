@@ -353,31 +353,17 @@ test("TapIn repairs the rejected draft instead of replacing it with canned fallb
   }
 });
 
-test("TapIn rejects a generic title echo and asks for description evidence", async () => {
+test("TapIn accepts a concrete title-grounded opening", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   let requestCount = 0;
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-  globalThis.fetch = async (_input, init) => {
+  globalThis.fetch = async () => {
     requestCount += 1;
-    const request = JSON.parse(String(init?.body ?? "{}")) as {
-      messages?: Array<{ content?: string }>;
+    const content = {
+      openingComment: "Street harassment is brutal. Why do so few people step in?",
+      reply: "Actually stepping in is the hard part. I work on SafeAgain, and that topic still gets me.",
     };
-    if (requestCount === 2) {
-      assert.match(
-        request.messages?.[0]?.content ?? "",
-        /does not reference a concrete detail from the video description/i
-      );
-    }
-    const content = requestCount === 1
-      ? {
-          openingComment: "The practical details around street harassment matter more than they first seem.",
-          reply: "That topic is hard to ignore. I work on SafeAgain, and it deserves more honest discussion.",
-        }
-      : {
-          openingComment: "Only 25% said someone helped them. That gap is brutal.",
-          reply: "Actually stepping in is the hard part. I work on SafeAgain, and that number still gets me.",
-        };
     return new Response(
       JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
       { status: 200, headers: { "content-type": "application/json" } }
@@ -393,11 +379,58 @@ test("TapIn rejects a generic title echo and asks for description evidence", asy
       videoDescription: "The research found 78% of women were harassed, but only 25% said someone helped them.",
     });
 
-    assert.equal(requestCount, 2);
-    assert.match(preview.openingComment, /25%/);
-    assert.doesNotMatch(preview.openingComment, /practical details around/i);
+    assert.equal(requestCount, 1);
+    assert.match(preview.openingComment, /street harassment/i);
   } finally {
     globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
+test("TapIn keeps the last safe prompt-faithful draft when only soft grounding misses", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  const originalConsoleWarn = console.warn;
+  let requestCount = 0;
+  const warnings: string[] = [];
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              openingComment: "How do people catch the bugs they miss after shipping an app? Testing and QA still feel impossible.",
+              reply: "Fresh eyes matter. I work on BeforeUsersDo. AI tests as customer personas, and human testers return recordings and fixes for Claude.",
+            }),
+          },
+        }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "BeforeUsersDo",
+      openingPrompt: "Ask how people handle testing and QA after shipping apps with bugs they miss.",
+      replyPrompt: "Say fresh eyes matter. Mention BeforeUsersDo. AI tests as customer personas, and human testers return recordings and fixes for Claude.",
+      videoTitle: "Codex is INSANE - Everything New in 10 Minutes",
+      videoDescription: "A breakdown of GPT capabilities, deployment, computer use, spreadsheets, and presentations.",
+    });
+
+    assert.equal(requestCount, 3);
+    assert.match(preview.openingComment, /testing and QA/i);
+    assert.match(preview.reply, /AI tests as customer personas/i);
+    assert.match(preview.reply, /human testers.*recordings.*fixes.*Claude/i);
+    assert.doesNotMatch(`${preview.openingComment} ${preview.reply}`, /part that stuck with me|number is hard to ignore/i);
+    assert.match(warnings.join("\n"), /safe prompt-faithful draft after soft grounding retries/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalConsoleWarn;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
   }

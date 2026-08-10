@@ -2077,6 +2077,9 @@ export function buildSocialCommentPlanningPrompt(input: {
   const forceDraft = Boolean(input.force);
   const brandName = commentBrandName(input.brand.name);
   const brandCommentPrompt = resolveSocialDiscoveryCommentPrompt(input.brand.socialDiscoveryCommentPrompt).slice(0, 4000);
+  const isTapInCampaign = brandCommentPrompt.includes(
+    "TapIn supplies the matched YouTube video title and description"
+  );
   const contextualMentionRule =
     plan.mentionPolicy === "possible_soft_mention"
       ? `Mention ${brandName} at most once only if it directly improves this answer. A useful no-mention comment is valid.`
@@ -2088,6 +2091,9 @@ export function buildSocialCommentPlanningPrompt(input: {
       : "You are designing one standalone top-level comment only.",
     "Use the following campaign instructions for commentDraft and, in thread mode, replyDraft:",
     brandCommentPrompt,
+    isTapInCampaign
+      ? "TapIn fidelity rule: preserve every safe requested intent in the opening and delayed-reply instructions. If those instructions request factual capabilities, include at most two concise details after disclosing affiliation. Remove invented experience, recommendations, guarantees, and unsupported claims, but never substitute unrelated generic copy."
+      : "",
     SOCIAL_COMMENT_PUNCTUATION_RULE,
     forceDraft
       ? `Selected-video mode: mention ${brandName} exactly once, casually, inside the real reaction to the video. ${brandName} must be present, but it should feel incidental, not promotional.`
@@ -2123,7 +2129,9 @@ export function buildSocialCommentPlanningPrompt(input: {
       ? "Thread rules: commentDraft should work as a normal standalone YouTube comment. replyDraft should read like a real second person responding to that comment, not a coordinated ad. Do not make the first comment obviously tee up the brand."
       : "Solo rules: commentDraft must work alone. No setup for another account.",
     draftMode === "thread"
-      ? "replyDraft rules: replyDraft is required whenever shouldComment is true. Keep it under 24 words, make it sound like a second person, do not overpraise, and do not sound coordinated. If no natural reply exists, set shouldComment to false and leave both drafts empty."
+      ? isTapInCampaign
+        ? "replyDraft rules: replyDraft is required whenever shouldComment is true. Usually stay under 24 words, but use up to 48 words when needed to preserve the delayed-reply instructions. Sound like a second person, do not overpraise, and do not sound coordinated."
+        : "replyDraft rules: replyDraft is required whenever shouldComment is true. Keep it under 24 words, make it sound like a second person, do not overpraise, and do not sound coordinated. If no natural reply exists, set shouldComment to false and leave both drafts empty."
       : "replyDraft rules: leave replyDraft empty in solo mode.",
     "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, replyDraft, assetNeeded, riskNotes, exitRules.",
     "",
@@ -2182,6 +2190,7 @@ async function requestSocialCommentPlan(input: {
 }
 
 function youtubeDraftProblem(input: {
+  allowFactualBrandContext: boolean;
   platform: SocialDiscoveryPlatform;
   forceDraft: boolean;
   draftMode: "solo" | "thread";
@@ -2193,10 +2202,20 @@ function youtubeDraftProblem(input: {
   if (input.draftMode === "thread" && !input.replyDraft.trim()) {
     return "missing replyDraft for thread mode";
   }
-  const openingStyleProblem = youtubeCommentStyleProblem(input.commentDraft, "opening");
+  const openingStyleProblem = youtubeCommentStyleProblem(
+    input.commentDraft,
+    "opening",
+    input.allowFactualBrandContext ? { maxCharacters: 280, maxWords: 40 } : undefined
+  );
   if (openingStyleProblem) return openingStyleProblem;
   if (input.draftMode === "thread") {
-    const replyStyleProblem = youtubeCommentStyleProblem(input.replyDraft, "reply");
+    const replyStyleProblem = youtubeCommentStyleProblem(
+      input.replyDraft,
+      "reply",
+      input.allowFactualBrandContext
+        ? { allowFactualBrandContext: true, maxCharacters: 360, maxWords: 48 }
+        : undefined
+    );
     if (replyStyleProblem) return replyStyleProblem;
   }
   const affiliationProblem =
@@ -2240,6 +2259,10 @@ async function enhanceInteractionPlanWithLlm(
 
   try {
     const brandName = commentBrandName(input.brand.name);
+    const isTapInCampaign = input.brand.socialDiscoveryCommentPrompt.includes(
+      "TapIn supplies the matched YouTube video title and description"
+    );
+    const replyMaxLength = isTapInCampaign ? 360 : 220;
     let promptUsed = prompt;
     let row = await requestSocialCommentPlan({ prompt: promptUsed });
 
@@ -2249,11 +2272,12 @@ async function enhanceInteractionPlanWithLlm(
     );
     let initialReplyDraft = compactText(
       normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(row.replyDraft)),
-      220
+      replyMaxLength
     );
     let rowShouldComment = row.shouldComment === false ? false : true;
     const initialProblem = rowShouldComment
       ? youtubeDraftProblem({
+          allowFactualBrandContext: isTapInCampaign,
           platform: input.post.platform,
           forceDraft: Boolean(options?.force),
           draftMode,
@@ -2267,14 +2291,16 @@ async function enhanceInteractionPlanWithLlm(
         prompt,
         "",
         `Regenerate from scratch because the previous draft failed: ${initialProblem}.`,
-        "Make it shorter, rougher, and more ordinary.",
+        "Repair that exact problem while preserving every safe campaign instruction and the concrete video reference.",
         YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
         `Mention ${brandName} exactly once, casually, inside the actual comment.`,
         `If ${brandName} is mentioned, identify the affiliation in first person.`,
         `Start with the broader topic. Keep ${brandName} as a small aside and end with uncertainty or an honest question when natural.`,
         `${brandName} should be context, not conclusion.`,
         `Do not append a standalone ${brandName} sentence.`,
-        `Do not explain what ${brandName} does unless the video directly calls for it.`,
+        isTapInCampaign
+          ? `If the campaign instructions explicitly request factual ${brandName} capabilities, keep at most two concise details after disclosing the affiliation. Do not recommend it or claim results.`
+          : `Do not explain what ${brandName} does unless the video directly calls for it.`,
         `Do not use generic side notes like 'we see that at ${brandName}' or 'we see that a lot at ${brandName}'.`,
         "Do not use a reusable template. Return JSON only.",
       ].join("\n");
@@ -2285,7 +2311,7 @@ async function enhanceInteractionPlanWithLlm(
       );
       initialReplyDraft = compactText(
         normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(row.replyDraft)),
-        220
+        replyMaxLength
       );
       rowShouldComment = row.shouldComment === false ? false : true;
     }
@@ -2309,6 +2335,7 @@ async function enhanceInteractionPlanWithLlm(
     }
     const finalProblem = shouldComment
       ? youtubeDraftProblem({
+          allowFactualBrandContext: isTapInCampaign,
           platform: input.post.platform,
           forceDraft,
           draftMode,

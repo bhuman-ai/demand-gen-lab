@@ -87,6 +87,79 @@ test("thread prompt requires a real reply or rejects the whole opportunity", () 
   assert.doesNotMatch(prompt, /leave it empty if fake or unnecessary/i);
 });
 
+test("TapIn live prompt preserves campaign instructions that need factual capability context", () => {
+  const tapInBrand = {
+    ...brand(),
+    name: "BeforeUsersDo",
+    socialDiscoveryCommentPrompt: [
+      "Opening comment instructions:",
+      "Ask how people deal with testing and QA after shipping apps with bugs they miss.",
+      "Delayed reply instructions:",
+      "Say fresh eyes matter. Mention BeforeUsersDo and explain that AI tests as customer personas while human testers return recordings and fixes.",
+      "TapIn supplies the matched YouTube video title and description to the generator automatically.",
+    ].join("\n"),
+  };
+  const prompt = buildSocialCommentPlanningPrompt({
+    brand: tapInBrand,
+    post: post(),
+    force: true,
+    mode: "thread",
+  });
+
+  assert.match(prompt, /TapIn fidelity rule/i);
+  assert.match(prompt, /preserve every safe requested intent/i);
+  assert.match(prompt, /use up to 48 words/i);
+  assert.match(prompt, /AI tests as customer personas/i);
+  assert.match(prompt, /human testers return recordings and fixes/i);
+});
+
+test("TapIn live generation keeps a prompt-faithful factual reply beyond the default limit", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  const tapInBrand = {
+    ...brand(),
+    name: "BeforeUsersDo",
+    socialDiscoveryCommentPrompt: [
+      "Opening comment instructions:",
+      "Ask how people deal with testing and QA after shipping apps with bugs they miss.",
+      "Delayed reply instructions:",
+      "Say fresh eyes matter. Mention BeforeUsersDo and explain that AI tests as customer personas while human testers return recordings and fixes.",
+      "TapIn supplies the matched YouTube video title and description to the generator automatically.",
+    ].join("\n"),
+  };
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => openRouterResponse({
+    headline: "QA after vibe coding",
+    fitSummary: "The video is about building and shipping apps with AI.",
+    shouldComment: true,
+    commentDraft: "How do people catch the bugs they miss after tutorials like this? Shipping an app and realizing QA missed things is brutal.",
+    replyDraft: "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.",
+    assetNeeded: "",
+    riskNotes: [],
+    exitRules: [],
+  });
+
+  try {
+    const drafted = await refreshSocialDiscoveryCommentDraft({
+      brand: tapInBrand,
+      post: post(),
+      force: true,
+      mode: "thread",
+    });
+
+    assert.equal(drafted.interactionPlan.sequence.length, 2);
+    assert.match(drafted.interactionPlan.sequence[0]?.draft ?? "", /bugs.*tutorial|tutorial.*bugs/i);
+    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /Fresh eyes/i);
+    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /I work on BeforeUsersDo/i);
+    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /AI tests apps as customer personas/i);
+    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /human testers.*recordings.*fixes.*Codex or Claude/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
 test("forced TapIn thread generation uses OpenRouter and returns both drafts", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
@@ -144,7 +217,7 @@ test("social comment prompt explicitly bans long dashes", () => {
     mode: "solo",
   });
   assert.match(prompt, /Never use em dashes or en dashes/i);
-  assert.match(prompt, /hard maximum 32 words/i);
+  assert.match(prompt, /standard maximum 32 words/i);
   assert.match(prompt, /small (?:disclosed )?aside/i);
   assert.doesNotMatch(prompt, /heuristic_comment:/i);
 });

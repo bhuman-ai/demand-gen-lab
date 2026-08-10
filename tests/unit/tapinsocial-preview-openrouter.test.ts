@@ -24,7 +24,7 @@ test("TapIn preview prompt explicitly bans long dashes", () => {
   });
 
   assert.match(prompt, /Never use em dashes or en dashes/i);
-  assert.match(prompt, /hard maximum 32 words/i);
+  assert.match(prompt, /standard maximum 32 words/i);
   assert.match(prompt, /viewer typing quickly/i);
 });
 
@@ -109,6 +109,61 @@ test("TapIn preview preserves a valid casual reply beyond the old 150-character 
   }
 });
 
+test("TapIn follows the requested QA question and factual BeforeUsersDo reply", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  let requestCount = 0;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async (_input, init) => {
+    requestCount += 1;
+    const request = JSON.parse(String(init?.body ?? "{}")) as {
+      messages?: Array<{ content?: string }>;
+    };
+    const prompt = request.messages?.[0]?.content ?? "";
+    assert.match(prompt, /Ask how people deal with testing and QA/i);
+    assert.match(prompt, /fresh eyes/i);
+    assert.match(prompt, /AI does the QA as persona of your customer/i);
+    assert.match(prompt, /human who tests your app/i);
+    assert.match(prompt, /every safe instruction.*required substance/i);
+
+    return new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              openingComment: "How do people catch the bugs they miss after tutorials like this? Shipping an app and realizing QA missed things is brutal.",
+              reply: "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.",
+            }),
+          },
+        }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "BeforeUsersDo",
+      openingPrompt: "Ask how people deal with testing and QA cause you followed this tutorial and others and have shipped app but theyre always full of bugs you miss",
+      replyPrompt: "Reply directly to the opening comment with saying you had this problem and u just need to get fresh eyes on it that's the only way. Mention Before Users Do in a relevant way. You can talk about their features which an AI does the QA as persona of your customer and for real testing they connect you with an actual human who tests your app and you get all the recordings all the fixes and instructions you just paste into codex/claude",
+      videoTitle: "100 hours of Vibe Coding lessons in 20 minutes",
+      videoDescription: "A condensed vibe coding tutorial about building and shipping apps with AI.",
+    });
+
+    assert.equal(requestCount, 1);
+    assert.match(preview.openingComment, /bugs.*tutorial|tutorial.*bugs/i);
+    assert.match(preview.reply, /Fresh eyes/i);
+    assert.match(preview.reply, /I work on BeforeUsersDo/i);
+    assert.match(preview.reply, /AI tests apps as customer personas/i);
+    assert.match(preview.reply, /human testers.*recordings.*fixes.*Codex or Claude/i);
+    assert.doesNotMatch(`${preview.openingComment} ${preview.reply}`, /practical details around|real challenge is applying it consistently/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
 test("TapIn preview retries polished mini-essays", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
@@ -158,11 +213,11 @@ test("TapIn preview retries a misspelled or undisclosed brand reply", async () =
     requestCount += 1;
     const content = requestCount === 1
       ? {
-          openingComment: "ranking with barely any content is wild",
+          openingComment: "copying the same seo checklist everywhere is wild",
           reply: "yeah clusterseoul verifies what actually works",
         }
       : {
-          openingComment: "ranking with barely any content is wild",
+          openingComment: "copying the same seo checklist everywhere is wild",
           reply: "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop",
         };
     return new Response(
@@ -193,7 +248,7 @@ test("comment-only preview does not require or return a reply", async () => {
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
   globalThis.fetch = async () => new Response(
-    JSON.stringify({ choices: [{ message: { content: JSON.stringify({ openingComment: "This workflow gets the personalization balance right—the details matter." }) } }] }),
+    JSON.stringify({ choices: [{ message: { content: JSON.stringify({ openingComment: "This practical walkthrough gets the personalization balance right—the details matter." }) } }] }),
     { status: 200, headers: { "content-type": "application/json" } }
   );
 
@@ -206,7 +261,7 @@ test("comment-only preview does not require or return a reply", async () => {
       videoTitle: "Personalized outreach workflows",
       videoDescription: "A practical walkthrough.",
     });
-    assert.equal(preview.openingComment, "This workflow gets the personalization balance right, the details matter.");
+    assert.equal(preview.openingComment, "This practical walkthrough gets the personalization balance right, the details matter.");
     assert.equal(preview.reply, "");
   } finally {
     globalThis.fetch = originalFetch;
@@ -215,24 +270,130 @@ test("comment-only preview does not require or return a reply", async () => {
   }
 });
 
-test("TapIn fallback stays native and transparent for a thread", () => {
+test("TapIn fallback grounds the thread in a concrete video claim", () => {
   const preview = buildTapInPreviewFallback({
     brandName: "SafeAgain",
     openingPrompt: "React naturally.",
     replyPrompt: "Mention SafeAgain as a personal aside.",
-    videoTitle: "Upcoming YouTube video about women's safety",
-    videoDescription: "Practical bystander intervention advice.",
+    videoTitle: "STAND UP Let's Act Together Against Street Harassment",
+    videoDescription: [
+      "L'Oréal Paris is a brand that stands for and with women.",
+      "The research found that the #1 issue women and girls face globally is harassment.",
+      "Yet 79% of women wish someone had intervened.",
+    ].join(" "),
   });
 
-  assert.equal(
-    preview.openingComment,
-    "The practical details around women's safety matter more than they first seem."
-  );
+  assert.match(preview.openingComment, /79% of women wish someone had intervened/i);
+  assert.doesNotMatch(preview.openingComment, /practical details around/i);
+  assert.doesNotMatch(preview.reply, /applying it consistently|question comes up often/i);
   assert.equal(youtubeCommentStyleProblem(preview.openingComment, "opening"), "");
   assert.equal(youtubeCommentStyleProblem(preview.reply, "reply"), "");
   assert.equal(youtubeExactBrandMentionProblem(preview.reply, "SafeAgain"), "");
   assert.equal(youtubeBrandAffiliationProblem(preview.reply, "SafeAgain"), "");
   assert.equal(youtubeBrandIsIncidentalProblem(preview.reply, "SafeAgain"), "");
+});
+
+test("TapIn repairs the rejected draft instead of replacing it with canned fallback copy", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  let requestCount = 0;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async (_input, init) => {
+    requestCount += 1;
+    const request = JSON.parse(String(init?.body ?? "{}")) as {
+      messages?: Array<{ content?: string }>;
+    };
+    if (requestCount === 2) {
+      assert.match(request.messages?.[0]?.content ?? "", /previous rejected draft/i);
+      assert.match(request.messages?.[0]?.content ?? "", /you should try it/i);
+      assert.match(request.messages?.[0]?.content ?? "", /reply uses direct recommendation/i);
+    }
+    const content = requestCount === 1
+      ? {
+          openingComment: "That 79% figure is brutal. Why do so few people step in?",
+          reply: "People need better ways to step in. I work on SafeAgain, and you should try it before it is too late.",
+        }
+      : {
+          openingComment: "That 79% figure is brutal. Why do so few people step in?",
+          reply: "Actually stepping in is the hard part. I work on SafeAgain, and that number still gets me.",
+        };
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "SafeAgain",
+      openingPrompt: "React to a concrete point and ask a real question.",
+      replyPrompt: "Reply naturally and disclose the SafeAgain affiliation.",
+      videoTitle: "STAND UP Let's Act Together Against Street Harassment",
+      videoDescription: "The research found that 79% of women wish someone had intervened.",
+    });
+
+    assert.equal(requestCount, 2);
+    assert.match(preview.openingComment, /79%/);
+    assert.equal(
+      preview.reply,
+      "Actually stepping in is the hard part. I work on SafeAgain, and that number still gets me."
+    );
+    assert.doesNotMatch(`${preview.openingComment} ${preview.reply}`, /practical details around|applying it consistently/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
+test("TapIn rejects a generic title echo and asks for description evidence", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  let requestCount = 0;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async (_input, init) => {
+    requestCount += 1;
+    const request = JSON.parse(String(init?.body ?? "{}")) as {
+      messages?: Array<{ content?: string }>;
+    };
+    if (requestCount === 2) {
+      assert.match(
+        request.messages?.[0]?.content ?? "",
+        /does not reference a concrete detail from the video description/i
+      );
+    }
+    const content = requestCount === 1
+      ? {
+          openingComment: "The practical details around street harassment matter more than they first seem.",
+          reply: "That topic is hard to ignore. I work on SafeAgain, and it deserves more honest discussion.",
+        }
+      : {
+          openingComment: "Only 25% said someone helped them. That gap is brutal.",
+          reply: "Actually stepping in is the hard part. I work on SafeAgain, and that number still gets me.",
+        };
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "SafeAgain",
+      openingPrompt: "React naturally to one concrete point.",
+      replyPrompt: "Reply naturally and disclose the SafeAgain affiliation.",
+      videoTitle: "STAND UP Let's Act Together Against Street Harassment",
+      videoDescription: "The research found 78% of women were harassed, but only 25% said someone helped them.",
+    });
+
+    assert.equal(requestCount, 2);
+    assert.match(preview.openingComment, /25%/);
+    assert.doesNotMatch(preview.openingComment, /practical details around/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
 });
 
 test("TapIn returns a usable comment preview when OpenRouter is unavailable", async () => {

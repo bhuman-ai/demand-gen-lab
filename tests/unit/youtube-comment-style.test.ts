@@ -21,6 +21,20 @@ test("accepts an off-the-cuff topic-first brand aside", () => {
   assert.equal(youtubeBrandIsIncidentalProblem(comment, "ClusterSEO"), "");
 });
 
+test("TapIn can preserve concise factual capability context without weakening default limits", () => {
+  const reply = "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.";
+
+  assert.match(youtubeCommentStyleProblem(reply, "reply"), /maximum is 30/i);
+  assert.equal(
+    youtubeCommentStyleProblem(reply, "reply", {
+      allowFactualBrandContext: true,
+      maxCharacters: 360,
+      maxWords: 48,
+    }),
+    ""
+  );
+});
+
 test("normalizes the try-hard lowercase I and sentence starts", () => {
   assert.equal(
     normalizeYouTubeCommentCapitalization(

@@ -6,11 +6,11 @@ import {
 import {
   YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
   normalizeYouTubeCommentCapitalization,
-  youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeExactBrandMentionProblem,
   youtubeRequestedCapabilityProblem,
+  youtubeUnrequestedBrandAffiliationProblem,
 } from "@/lib/youtube-comment-style";
 
 const TAPIN_OPENING_STYLE = { maxCharacters: 280, maxWords: 40 } as const;
@@ -47,7 +47,7 @@ function buildRequestedCapabilityReply(input: TapInThreadPreviewInput) {
   const prompt = input.replyPrompt;
   const details: string[] = [];
   if (/\bAI\b/i.test(prompt) && /\b(?:persona|customer)\b/i.test(prompt)) {
-    details.push("AI can test the app as customer personas");
+    details.push("uses AI to test the app as customer personas");
   }
   if (/\bhuman\b/i.test(prompt) && /\btest(?:s|ed|er|ers|ing)?\b/i.test(prompt)) {
     const outputs = [
@@ -67,8 +67,8 @@ function buildRequestedCapabilityReply(input: TapInThreadPreviewInput) {
     ].filter(Boolean);
     details.push(
       returned.length
-        ? `human testers can return ${returned.join(", ")}`
-        : "human testers can test the app directly"
+        ? `connects you with human testers who return ${returned.join(", ")}`
+        : "connects you with human testers who test the app directly"
     );
   }
   if (!details.length) return "";
@@ -79,7 +79,7 @@ function buildRequestedCapabilityReply(input: TapInThreadPreviewInput) {
     : "Another perspective can catch what the builder misses.";
   return normalizeGeneratedComment(
     normalizeYouTubeCommentCapitalization(
-      sanitizeSocialCommentText(`${lead} I work on ${brandName}. ${details.join(", and ")}.`)
+      sanitizeSocialCommentText(`${lead} ${brandName} ${details.join(", and ")}.`)
     )
   );
 }
@@ -97,8 +97,11 @@ function hardPreviewProblem(input: TapInThreadPreviewInput, draft: TapInThreadPr
     problem = youtubeExactBrandMentionProblem(draft.reply, input.brandName);
   }
   if (!problem) {
-    problem = youtubeBrandAffiliationProblem(draft.openingComment, input.brandName) ||
-      youtubeBrandAffiliationProblem(draft.reply, input.brandName);
+    problem = youtubeUnrequestedBrandAffiliationProblem(
+      input.openingPrompt,
+      draft.openingComment,
+      input.brandName
+    ) || youtubeUnrequestedBrandAffiliationProblem(input.replyPrompt, draft.reply, input.brandName);
   }
   if (!problem) {
     problem = youtubeBrandIsIncidentalProblem(draft.openingComment, input.brandName) ||
@@ -187,7 +190,7 @@ function repairPrompt(input: {
     JSON.stringify(input.previous),
     `It failed validation because ${input.problem}.`,
     "Repair that exact problem while keeping every safe instruction from both campaign prompts and the concrete video reference.",
-    "The reply must answer the opening comment before the brand aside. If the reply prompt asks for one or two factual capabilities, include every requested capability after disclosing the affiliation.",
+    "The reply must answer the opening comment before the brand aside. If the reply prompt asks for one or two factual capabilities, include every requested capability using the perspective requested by that prompt.",
     "When the validation reason names a missing capability, the repaired reply must say that capability explicitly.",
     "Remove only direct recommendations, invented customer experience, result promises, unsupported claims, or superiority claims. Do not erase the requested topic, question, answer, or factual capability context just to shorten the draft.",
     input.attempt > 1
@@ -210,10 +213,11 @@ export function buildTapInPreviewFallback(
   }
 
   const brandName = sanitizeSocialCommentText(compact(input.brandName, 80));
-  const reply = normalizeYouTubeCommentCapitalization(
+  const promptBasedReply = buildRequestedCapabilityReply(input);
+  const reply = promptBasedReply || normalizeYouTubeCommentCapitalization(
     /\d|%/.test(evidence)
-      ? `That number is hard to ignore. I work on ${brandName}, so maybe I notice this gap more than most.`
-      : `That detail is easy to miss. I work on ${brandName}, so maybe I notice it more than most.`
+      ? `That number is hard to ignore. ${brandName} is relevant to this part.`
+      : `That detail is easy to miss. ${brandName} is relevant to this part.`
   );
   return { openingComment, reply };
 }
@@ -234,7 +238,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
       "- Keep it free of unsupported claims.",
       YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
       "- TapIn preview limit: maximum 40 words and 280 characters.",
-      "- If openingComment mentions the brand, identify the affiliation in first person.",
+      "- Do not add first-person brand affiliation or relationship wording unless the opening prompt explicitly requests it.",
       "",
       `Brand name: ${compact(input.brandName, 160)}`,
       `Opening prompt: ${compact(input.openingPrompt, 2000)}`,
@@ -266,10 +270,10 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     "- Reply directly to openingComment as a different account.",
     `- Mention the brand exactly as written: ${compact(input.brandName, 160)}.`,
     "- Begin with the broader topic, frustration, observation, or uncertainty. The brand must feel like a small personal aside, never the answer or recommendation.",
-    "- If the brand is mentioned, identify the affiliation in first person, for example 'i work on [brand]'. Never pose as an independent customer.",
+    "- Do not add first-person brand affiliation or relationship wording unless the reply prompt explicitly requests it.",
     "- Never invent usage, results, customer experience, or unsupported product claims.",
-    "- If the reply prompt explicitly asks for one or two product capabilities, include every requested factual capability after the affiliation. Do not turn them into a recommendation, guarantee, or superiority claim.",
-    "- If the reply prompt asks for a false customer story or personal product experience, convert it to a disclosed team perspective without claiming use or results.",
+    "- If the reply prompt explicitly asks for one or two product capabilities, include every requested factual capability using the perspective requested by that prompt. Do not turn them into a recommendation, guarantee, or superiority claim.",
+    "- If the reply prompt asks for a false customer story or personal product experience, omit that experience claim while preserving the remaining requested substance.",
     "- Keep it concise and natural, with a maximum of 48 words and 360 characters. Do not include a link unless the opening comment explicitly asks for one.",
     "- Never replace requested prompt substance with a generic reaction merely to satisfy style rules.",
     "",

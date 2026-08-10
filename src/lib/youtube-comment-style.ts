@@ -20,9 +20,10 @@ export const YOUTUBE_NATIVE_COMMENT_STYLE_RULES = [
   "- Do not use semicolons, headings, bullets, marketing language, or polished bridge phrases.",
   "- Avoid AI-sounding openings such as 'Really appreciated the point', 'This is spot on', 'What really stood out', and 'It makes sense that'.",
   "- Avoid salesy phrases such as 'tools like', 'game changer', 'valuable insights', 'great breakdown', and 'if you are serious about'.",
-  "- If a brand is required, make it a minor aside rather than the point. Start with the broader topic, then disclose the affiliation naturally.",
-  "- Never directly recommend the brand, claim results, or claim superiority. Only explain factual capabilities when the campaign instructions explicitly request them, using one compact clause or two short clauses after disclosing the affiliation.",
-  "- Texture examples only, do not copy: '3 hours is wild lol', 'seo feels rough lately. I work on [brand] and even we see weird results. Anyone else?', 'wait does that actually work?'.",
+  "- If a brand is required, make it a minor aside rather than the point. Start with the broader topic and use only the perspective requested by the campaign instructions.",
+  "- Never directly recommend the brand, claim results, or claim superiority. Only explain factual capabilities when the campaign instructions explicitly request them, using one compact clause or two short clauses.",
+  "- Never add first-person brand affiliation or relationship wording unless the campaign instructions explicitly request it.",
+  "- Texture examples only, do not copy: '3 hours is wild lol', 'seo feels rough lately. Anyone seeing anything different?', 'wait does that actually work?'.",
 ].join("\n");
 
 const FORMAL_OR_SALESY_PATTERNS: Array<{
@@ -152,18 +153,23 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function youtubeBrandAffiliationProblem(value: unknown, brandName: string) {
+export function youtubeUnrequestedBrandAffiliationProblem(
+  instructions: unknown,
+  value: unknown,
+  brandName: string
+) {
+  const prompt = String(instructions ?? "").replace(/\s+/g, " ").trim();
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   const brand = String(brandName ?? "").replace(/\s+/g, " ").trim();
   if (!text || !brand || !new RegExp(`\\b${escapeRegExp(brand)}\\b`, "i").test(text)) return "";
-  if (
-    /\b(?:i work (?:on|at|with)|i'm (?:on|with)|i am (?:on|with)|we (?:built|make|run|work on)|we're (?:behind|the team)|we are (?:behind|the team)|our team)\b/i.test(
-      text
-    )
-  ) {
-    return "";
-  }
-  return `mentions ${brand} without plainly identifying the affiliation`;
+  const affiliationPattern = /\b(?:i work (?:on|at|with)|i'm (?:on|with)|i am (?:on|with)|we (?:built|make|run|work on)|we're (?:behind|the team)|we are (?:behind|the team)|our team)\b/i;
+  if (!affiliationPattern.test(text)) return "";
+  const promptRequestsAffiliation =
+    /\b(?:disclos(?:e|ed|ing|ure)|affiliat(?:e|ed|ion)|relationship)\b/i.test(prompt) ||
+    affiliationPattern.test(prompt);
+  return promptRequestsAffiliation
+    ? ""
+    : `adds first-person ${brand} affiliation that the campaign prompt did not request`;
 }
 
 export function youtubeExactBrandMentionProblem(value: unknown, brandName: string) {

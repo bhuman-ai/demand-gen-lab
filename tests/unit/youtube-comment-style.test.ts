@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
   normalizeYouTubeCommentCapitalization,
-  youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeExactBrandMentionProblem,
   youtubeRequestedCapabilityProblem,
+  youtubeUnrequestedBrandAffiliationProblem,
 } from "../../src/lib/youtube-comment-style";
 
 test("accepts short native YouTube comments and replies", () => {
@@ -15,15 +16,20 @@ test("accepts short native YouTube comments and replies", () => {
   assert.equal(youtubeCommentStyleProblem("Appreciate this", "reply"), "");
 });
 
-test("accepts an off-the-cuff topic-first brand aside", () => {
-  const comment = "SEO feels brutal lately. I work on ClusterSEO and tiktok links have been weirdly decent. Anyone else seeing that?";
+test("accepts an off-the-cuff topic-first brand aside without affiliation", () => {
+  const comment = "SEO feels brutal lately. ClusterSEO comes to mind because tiktok links have been weirdly decent. Anyone else seeing that?";
   assert.equal(youtubeCommentStyleProblem(comment, "reply"), "");
-  assert.equal(youtubeBrandAffiliationProblem(comment, "ClusterSEO"), "");
+  assert.equal(youtubeUnrequestedBrandAffiliationProblem("Mention ClusterSEO.", comment, "ClusterSEO"), "");
   assert.equal(youtubeBrandIsIncidentalProblem(comment, "ClusterSEO"), "");
 });
 
+test("shared rules never inject first-person affiliation", () => {
+  assert.doesNotMatch(YOUTUBE_NATIVE_COMMENT_STYLE_RULES, /i work on \[brand\]|identify the affiliation|after disclosing/i);
+  assert.match(YOUTUBE_NATIVE_COMMENT_STYLE_RULES, /Never add first-person brand affiliation.*unless/i);
+});
+
 test("TapIn can preserve concise factual capability context without weakening default limits", () => {
-  const reply = "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.";
+  const reply = "Fresh eyes are usually what changes it. BeforeUsersDo uses AI to test apps as customer personas, and connects you with human testers who return recordings, fixes, and instructions for Codex or Claude.";
 
   assert.match(youtubeCommentStyleProblem(reply, "reply"), /maximum is 30/i);
   assert.equal(
@@ -45,7 +51,7 @@ test("TapIn rejects invented experience and missing requested capabilities", () 
   };
   assert.match(
     youtubeCommentStyleProblem(
-      "Yeah same problem here. Fresh eyes matter. I work on BeforeUsersDo and human testers send recordings and fixes.",
+      "Yeah same problem here. Fresh eyes matter. BeforeUsersDo connects you with human testers who send recordings and fixes.",
       "reply",
       options
     ),
@@ -56,14 +62,14 @@ test("TapIn rejects invented experience and missing requested capabilities", () 
   assert.match(
     youtubeRequestedCapabilityProblem(
       instructions,
-      "Fresh eyes matter. I work on BeforeUsersDo and human testers send recordings and fixes for Claude."
+      "Fresh eyes matter. BeforeUsersDo connects you with human testers who send recordings and fixes for Claude."
     ),
     /omits the requested AI customer-persona QA capability/i
   );
   assert.equal(
     youtubeRequestedCapabilityProblem(
       instructions,
-      "Fresh eyes matter. I work on BeforeUsersDo. AI tests as customer personas, and human testers send recordings and fixes for Claude."
+      "Fresh eyes matter. BeforeUsersDo uses AI to test as customer personas, and human testers send recordings and fixes for Claude."
     ),
     ""
   );
@@ -101,13 +107,29 @@ test("rejects polished mini-essays and sales bridges", () => {
   );
 });
 
-test("requires first-person affiliation when a brand is mentioned", () => {
+test("rejects first-person affiliation unless the campaign prompt requests it", () => {
   assert.match(
-    youtubeBrandAffiliationProblem("ClusterSEO is useful for finding better advice", "ClusterSEO"),
-    /without plainly identifying the affiliation/i
+    youtubeUnrequestedBrandAffiliationProblem(
+      "Mention ClusterSEO.",
+      "SEO feels rough. I work on ClusterSEO and see this a lot.",
+      "ClusterSEO"
+    ),
+    /campaign prompt did not request/i
   );
   assert.equal(
-    youtubeBrandAffiliationProblem("i work on ClusterSEO, this problem comes up nonstop", "ClusterSEO"),
+    youtubeUnrequestedBrandAffiliationProblem(
+      "Mention ClusterSEO and disclose that I work on it.",
+      "SEO feels rough. I work on ClusterSEO and see this a lot.",
+      "ClusterSEO"
+    ),
+    ""
+  );
+  assert.equal(
+    youtubeUnrequestedBrandAffiliationProblem(
+      "Mention ClusterSEO.",
+      "SEO feels rough. ClusterSEO comes to mind here.",
+      "ClusterSEO"
+    ),
     ""
   );
 });

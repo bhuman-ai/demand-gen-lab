@@ -3,7 +3,12 @@ import test from "node:test";
 
 import type { BrandRecord } from "../../src/lib/factory-data";
 import type { SocialDiscoveryPost } from "../../src/lib/social-discovery-types";
-import { isEligibleYouTubePreviewFallbackPost } from "../../src/lib/social-discovery-youtube-search";
+import { tapInPreviewCampaignBrand } from "../../src/lib/social-discovery-campaign-context";
+import {
+  discoverYouTubeSearchPostsForBrand,
+  isEligibleYouTubePreviewFallbackPost,
+  isWithinYouTubeDiscoveryWindow,
+} from "../../src/lib/social-discovery-youtube-search";
 import {
   buildTapInPreviewTargetExample,
   discoverTapInPreviewVideo,
@@ -36,6 +41,7 @@ function candidate(
     risingScore,
     engagementScore: 100,
     providerRank: 1,
+    postedAt: new Date().toISOString(),
     interactionPlan: { surfaceType: "generic" },
   } as SocialDiscoveryPost;
 }
@@ -100,6 +106,7 @@ test("preview checks every campaign topic and chooses the strongest policy match
   ]);
   assert.ok(calls.every((call) => call.maxResults === 25));
   assert.ok(calls.every((call) => call.order === "relevance"));
+  assert.ok(calls.every((call) => call.includePolicyFallbackCandidates === true));
   assert.equal(result.summary.found, 75);
 });
 
@@ -143,6 +150,31 @@ test("preview fallback excludes news and political surfaces", () => {
   assert.equal(isEligibleYouTubePreviewFallbackPost(candidate("video_safe", "one", 20, 20)), true);
 });
 
+test("preview requests real videos outside the live policy window", async () => {
+  const olderRealMatch = candidate("video_older", "women's safety", 64, 20);
+  olderRealMatch.postedAt = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+
+  const result = await discoverTapInPreviewVideo({
+    brand,
+    queries: ["women's safety"],
+    policy,
+    discover: async (input) => discovery(input.queries[0], {
+      candidates: input.includePolicyFallbackCandidates ? [olderRealMatch] : [],
+    }),
+  });
+
+  assert.equal(result.post?.id, "video_older");
+  assert.equal(result.selectionMode, "best_available");
+});
+
+test("live policy age stays strict while preview can rank an older candidate", () => {
+  const now = Date.parse("2026-08-10T00:00:00.000Z");
+  const post = { postedAt: "2026-08-07T00:00:00.000Z" };
+
+  assert.equal(isWithinYouTubeDiscoveryWindow(post, 24, now), false);
+  assert.equal(isWithinYouTubeDiscoveryWindow(post, 168, now), true);
+});
+
 test("preview checks at most three campaign topics", async () => {
   const queries: string[] = [];
   await discoverTapInPreviewVideo({
@@ -169,4 +201,65 @@ test("no safe current candidate becomes a clearly hypothetical future target", (
   assert.match(example.description, /representative future match/i);
   assert.match(example.description, /hypothetical/i);
   assert.equal(example.url, "");
+});
+
+test("preview candidate pool keeps older and below-subscriber real videos without weakening policy matches", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.YOUTUBE_DATA_API_KEY;
+  const publishedAt = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+  const searchUrls: URL[] = [];
+  process.env.YOUTUBE_DATA_API_KEY = "test-youtube-key";
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/search")) {
+      searchUrls.push(url);
+      return Response.json({
+        items: [
+          { id: { videoId: "established" }, snippet: { channelId: "channel-big", title: "Women's safety planning", description: "Practical safety planning advice", publishedAt } },
+          { id: { videoId: "small" }, snippet: { channelId: "channel-small", title: "Street safety basics", description: "Everyday street safety", publishedAt } },
+        ],
+      });
+    }
+    if (url.pathname.endsWith("/videos")) {
+      return Response.json({
+        items: [
+          { id: "established", snippet: { title: "Women's safety planning", description: "Practical safety planning advice", publishedAt }, statistics: { viewCount: "1000", likeCount: "100", commentCount: "20" } },
+          { id: "small", snippet: { title: "Street safety basics", description: "Everyday street safety", publishedAt }, statistics: { viewCount: "100", likeCount: "10", commentCount: "2" } },
+        ],
+      });
+    }
+    if (url.pathname.endsWith("/channels")) {
+      return Response.json({
+        items: [
+          { id: "channel-big", snippet: { title: "Women's Safety Channel" }, statistics: { subscriberCount: "10000" } },
+          { id: "channel-small", snippet: { title: "Neighborhood Safety" }, statistics: { subscriberCount: "20" } },
+        ],
+      });
+    }
+    throw new Error(`Unexpected YouTube request: ${url.pathname}`);
+  };
+
+  try {
+    const result = await discoverYouTubeSearchPostsForBrand({
+      brand: tapInPreviewCampaignBrand(brand, {
+        campaignName: "SafeAgain · Women's safety",
+        targets: ["women's safety"],
+      }),
+      queries: ["women's safety"],
+      order: "relevance",
+      policy,
+      includePolicyFallbackCandidates: true,
+    });
+
+    assert.equal(searchUrls.length, 1);
+    assert.equal(searchUrls[0].searchParams.has("publishedAfter"), false);
+    assert.deepEqual(result.candidates.map((post) => post.externalId), ["established", "small"]);
+    assert.equal(result.queryStats[0].eligible, 1);
+    assert.equal(result.queryStats[0].rejectedSubscriberGate, 1);
+    assert.equal(result.posts.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalApiKey === undefined) delete process.env.YOUTUBE_DATA_API_KEY;
+    else process.env.YOUTUBE_DATA_API_KEY = originalApiKey;
+  }
 });

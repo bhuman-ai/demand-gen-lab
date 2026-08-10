@@ -1,6 +1,9 @@
 import { createId, type BrandRecord } from "@/lib/factory-data";
 import type { OutreachAccountSecrets } from "@/lib/outreach-data";
-import { buildScoredSocialDiscoveryPost } from "@/lib/social-discovery";
+import {
+  buildPreviewScoredSocialDiscoveryPost,
+  buildScoredSocialDiscoveryPost,
+} from "@/lib/social-discovery";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import { meetsYouTubeSubscriberMinimum } from "@/lib/social-discovery-youtube-eligibility";
 import { searchYouTubeVideos } from "@/lib/youtube";
@@ -67,16 +70,31 @@ export function isEligibleYouTubePreviewFallbackPost(post: SocialDiscoveryPost) 
   return post.interactionPlan.surfaceType !== "news_or_political";
 }
 
+export function isWithinYouTubeDiscoveryWindow(
+  post: Pick<SocialDiscoveryPost, "postedAt">,
+  maxVideoAgeHours: number,
+  now = Date.now()
+) {
+  const publishedAt = Date.parse(String(post.postedAt ?? ""));
+  if (!Number.isFinite(publishedAt)) return false;
+  const ageLimitMs = Math.max(1, Number(maxVideoAgeHours) || 1) * 60 * 60 * 1000;
+  return publishedAt >= now - ageLimitMs;
+}
+
 function buildYouTubeDiscoveryPost(input: {
   brand: BrandRecord;
   query: string;
   index: number;
   result: Awaited<ReturnType<typeof searchYouTubeVideos>>[number];
   policy: SocialDiscoveryYouTubePolicy;
+  ignoreFreshness?: boolean;
 }): SocialDiscoveryPost | null {
   const { result } = input;
   const now = new Date().toISOString();
-  return buildScoredSocialDiscoveryPost({
+  const buildPost = input.ignoreFreshness
+    ? buildPreviewScoredSocialDiscoveryPost
+    : buildScoredSocialDiscoveryPost;
+  return buildPost({
     id: createId("socialpost"),
     brandId: input.brand.id,
     platform: "youtube",
@@ -133,6 +151,7 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
   secrets?: Pick<OutreachAccountSecrets, "youtubeClientId" | "youtubeClientSecret" | "youtubeRefreshToken">;
   preferApiKey?: boolean;
   policy?: SocialDiscoveryYouTubePolicy | null;
+  includePolicyFallbackCandidates?: boolean;
 }) {
   const queries = input.queries
     .map((query) => String(query ?? "").replace(/\s+/g, " ").trim())
@@ -144,7 +163,10 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
     minRelevanceScore: numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RELEVANCE_SCORE", 18, 0, 100),
     minRisingScore: numberEnv("SOCIAL_DISCOVERY_YOUTUBE_REFILL_MIN_RISING_SCORE", 30, 0, 100),
   }) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
-  const publishedAfter = isoHoursAgo(policy.maxVideoAgeHours);
+  const includePolicyFallbackCandidates = input.includePolicyFallbackCandidates === true;
+  const publishedAfter = includePolicyFallbackCandidates
+    ? undefined
+    : isoHoursAgo(policy.maxVideoAgeHours);
   const posts: SocialDiscoveryPost[] = [];
   const candidates: SocialDiscoveryPost[] = [];
   const errors: YouTubeDiscoveryError[] = [];
@@ -163,31 +185,43 @@ export async function discoverYouTubeSearchPostsForBrand(input: {
         preferApiKey: input.preferApiKey ?? true,
       });
       found += results.length;
-      const eligibleResults = results.filter((result) =>
-        meetsYouTubeSubscriberMinimum(result.subscriberCount, policy.minSubscriberCount)
-      );
-      eligible += eligibleResults.length;
-      const builtPosts = eligibleResults
-        .map((result, index) =>
-          buildYouTubeDiscoveryPost({
+      const builtEntries = results
+        .map((result, index) => ({
+          result,
+          post: buildYouTubeDiscoveryPost({
             brand: input.brand,
             query,
             index,
             result,
             policy,
-          })
+            ignoreFreshness: includePolicyFallbackCandidates,
+          }),
+        }))
+        .filter((entry): entry is { result: (typeof results)[number]; post: SocialDiscoveryPost } =>
+          Boolean(entry.post)
+        );
+      const eligiblePosts = builtEntries
+        .filter(({ result }) =>
+          meetsYouTubeSubscriberMinimum(result.subscriberCount, policy.minSubscriberCount)
         )
-        .filter((post): post is SocialDiscoveryPost => Boolean(post));
-      const acceptedPosts = builtPosts.filter((post) => isEligibleYouTubeDiscoveryPost(post, policy));
-      candidates.push(...builtPosts.filter(isEligibleYouTubePreviewFallbackPost));
+        .map(({ post }) => post);
+      eligible += eligiblePosts.length;
+      const acceptedPosts = eligiblePosts.filter((post) =>
+        isWithinYouTubeDiscoveryWindow(post, policy.maxVideoAgeHours) &&
+        isEligibleYouTubeDiscoveryPost(post, policy)
+      );
+      const fallbackPool = includePolicyFallbackCandidates
+        ? builtEntries.map(({ post }) => post)
+        : eligiblePosts;
+      candidates.push(...fallbackPool.filter(isEligibleYouTubePreviewFallbackPost));
       posts.push(...acceptedPosts);
       queryStats.push({
         query,
         found: results.length,
-        eligible: eligibleResults.length,
+        eligible: eligiblePosts.length,
         accepted: acceptedPosts.length,
-        rejectedSubscriberGate: results.length - eligibleResults.length,
-        rejectedTargetGrade: builtPosts.length - acceptedPosts.length,
+        rejectedSubscriberGate: results.length - eligiblePosts.length,
+        rejectedTargetGrade: eligiblePosts.length - acceptedPosts.length,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "YouTube search failed";

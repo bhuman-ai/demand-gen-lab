@@ -110,6 +110,7 @@ export async function discoverTapInPreviewVideo(input: {
       order: "relevance" as const,
       secrets: input.secrets,
       policy: input.policy,
+      includePolicyFallbackCandidates: true,
     };
     let discovery = await discover({ ...discoveryInput, preferApiKey: true });
     if (input.secrets && everyQueryFailed(discovery)) {

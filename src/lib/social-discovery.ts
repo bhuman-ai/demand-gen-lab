@@ -2646,7 +2646,7 @@ function postWithScoring(input: Omit<
   "matchedTerms" | "intent" | "relevanceScore" | "risingScore" | "status" | "interactionPlan"
 > & {
   brand: BrandRecord;
-}) : SocialDiscoveryPost | null {
+}, options: { ignoreFreshness?: boolean } = {}) : SocialDiscoveryPost | null {
   const combinedText = `${input.title}\n${input.body}\n${input.community}`;
   const contextFit = brandContextFitFor({
     brand: input.brand,
@@ -2657,7 +2657,7 @@ function postWithScoring(input: Omit<
     return null;
   }
   const effectivePostedAt = String(input.postedAt ?? "").trim();
-  if (!isFreshEnoughForDiscovery(effectivePostedAt)) {
+  if (!options.ignoreFreshness && !isFreshEnoughForDiscovery(effectivePostedAt)) {
     return null;
   }
   const matchedTerms = matchedTermsFor({
@@ -2742,6 +2742,15 @@ export function buildScoredSocialDiscoveryPost(input: Omit<
   brand: BrandRecord;
 }): SocialDiscoveryPost | null {
   return postWithScoring(input);
+}
+
+export function buildPreviewScoredSocialDiscoveryPost(input: Omit<
+  SocialDiscoveryPost,
+  "matchedTerms" | "intent" | "relevanceScore" | "risingScore" | "status" | "interactionPlan"
+> & {
+  brand: BrandRecord;
+}): SocialDiscoveryPost | null {
+  return postWithScoring(input, { ignoreFreshness: true });
 }
 
 export function buildSubscribedSocialDiscoveryPost(input: Omit<

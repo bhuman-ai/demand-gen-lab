@@ -21,7 +21,7 @@ export const YOUTUBE_NATIVE_COMMENT_STYLE_RULES = [
   "- Avoid AI-sounding openings such as 'Really appreciated the point', 'This is spot on', 'What really stood out', and 'It makes sense that'.",
   "- Avoid salesy phrases such as 'tools like', 'game changer', 'valuable insights', 'great breakdown', and 'if you are serious about'.",
   "- If a brand is required, make it a minor aside rather than the point. Start with the broader topic, then disclose the affiliation naturally.",
-  "- Never directly recommend the brand, claim results, or claim superiority. Only explain a factual capability when the campaign instructions explicitly request it, and keep it to one short clause after disclosing the affiliation.",
+  "- Never directly recommend the brand, claim results, or claim superiority. Only explain factual capabilities when the campaign instructions explicitly request them, using one compact clause or two short clauses after disclosing the affiliation.",
   "- Texture examples only, do not copy: '3 hours is wild lol', 'seo feels rough lately. I work on [brand] and even we see weird results. Anyone else?', 'wait does that actually work?'.",
 ].join("\n");
 

@@ -71,17 +71,12 @@ function openingGroundingProblem(input: {
 }) {
   const titleTokens = groundingTokens(input.videoTitle);
   const descriptionTokens = groundingTokens(input.videoDescription);
-  const distinctiveDescriptionTokens = new Set(
-    [...descriptionTokens].filter((token) => !titleTokens.has(token))
-  );
-  const evidenceTokens = distinctiveDescriptionTokens.size >= 2
-    ? distinctiveDescriptionTokens
-    : new Set([...titleTokens, ...descriptionTokens]);
+  const evidenceTokens = new Set([...titleTokens, ...descriptionTokens]);
   if (!evidenceTokens.size) return "";
 
   const openingTokens = groundingTokens(input.openingComment);
   if ([...openingTokens].some((token) => evidenceTokens.has(token))) return "";
-  return "opening does not reference a concrete detail from the video description";
+  return "opening does not reference the video title or description";
 }
 
 function fallbackEvidencePhrase(value: unknown) {
@@ -226,6 +221,7 @@ export async function generateTapInThreadPreview(
   const basePrompt = buildTapInPreviewPrompt(input);
   let lastProblem = "";
   let previous: TapInThreadPreview = { openingComment: "", reply: "" };
+  let lastSafePromptFaithfulDraft: TapInThreadPreview | null = null;
 
   try {
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -266,13 +262,6 @@ export async function generateTapInThreadPreview(
       );
       previous = { openingComment, reply };
       lastProblem = youtubeCommentStyleProblem(openingComment, "opening", TAPIN_OPENING_STYLE);
-      if (!lastProblem) {
-        lastProblem = openingGroundingProblem({
-          openingComment,
-          videoTitle: input.videoTitle,
-          videoDescription: input.videoDescription,
-        });
-      }
       if (!lastProblem && !commentOnly) {
         lastProblem = youtubeCommentStyleProblem(reply, "reply", TAPIN_REPLY_STYLE);
       }
@@ -290,10 +279,27 @@ export async function generateTapInThreadPreview(
         lastProblem = youtubeBrandIsIncidentalProblem(openingComment, input.brandName) ||
           youtubeBrandIsIncidentalProblem(reply, input.brandName);
       }
-      if (!lastProblem && openingComment && (commentOnly || reply)) {
+      if (!lastProblem && (!openingComment || (!commentOnly && !reply))) {
+        lastProblem = "the thread was incomplete";
+      }
+      if (!lastProblem) {
+        lastSafePromptFaithfulDraft = { openingComment, reply };
+        lastProblem = openingGroundingProblem({
+          openingComment,
+          videoTitle: input.videoTitle,
+          videoDescription: input.videoDescription,
+        });
+      }
+      if (!lastProblem) {
         return { openingComment, reply };
       }
-      if (!lastProblem) lastProblem = "the thread was incomplete";
+    }
+    if (lastSafePromptFaithfulDraft) {
+      console.warn("[tapin-preview] using safe prompt-faithful draft after soft grounding retries", JSON.stringify({
+        campaignType: commentOnly ? "comment" : "thread",
+        reason: lastProblem.slice(0, 800),
+      }));
+      return lastSafePromptFaithfulDraft;
     }
     throw new Error(`Preview generation did not sound like a native YouTube comment: ${lastProblem}.`);
   } catch (error) {

@@ -10,11 +10,13 @@ import {
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeExactBrandMentionProblem,
+  youtubeRequestedCapabilityProblem,
 } from "@/lib/youtube-comment-style";
 
 const TAPIN_OPENING_STYLE = { maxCharacters: 280, maxWords: 40 } as const;
 const TAPIN_REPLY_STYLE = {
   allowFactualBrandContext: true,
+  disallowPersonalExperience: true,
   maxCharacters: 360,
   maxWords: 48,
 } as const;
@@ -123,7 +125,7 @@ function repairPrompt(input: {
     JSON.stringify(input.previous),
     `It failed validation because ${input.problem}.`,
     "Repair that exact problem while keeping every safe instruction from both campaign prompts and the concrete video reference.",
-    "The reply must answer the opening comment before the brand aside. If the reply prompt asks for factual capabilities, keep at most two concise details after disclosing the affiliation.",
+    "The reply must answer the opening comment before the brand aside. If the reply prompt asks for one or two factual capabilities, include every requested capability after disclosing the affiliation.",
     "Remove only direct recommendations, invented customer experience, result promises, unsupported claims, or superiority claims. Do not erase the requested topic, question, answer, or factual capability context just to shorten the draft.",
     input.attempt > 1
       ? "Use two plain, short sentences per line. Prefer a specific number, claim, or detail from the video over a broad summary."
@@ -203,7 +205,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     "- Begin with the broader topic, frustration, observation, or uncertainty. The brand must feel like a small personal aside, never the answer or recommendation.",
     "- If the brand is mentioned, identify the affiliation in first person, for example 'i work on [brand]'. Never pose as an independent customer.",
     "- Never invent usage, results, customer experience, or unsupported product claims.",
-    "- If the reply prompt explicitly asks for product capabilities, include at most two concise factual capability details after the affiliation. Do not turn them into a recommendation, guarantee, or superiority claim.",
+    "- If the reply prompt explicitly asks for one or two product capabilities, include every requested factual capability after the affiliation. Do not turn them into a recommendation, guarantee, or superiority claim.",
     "- If the reply prompt asks for a false customer story or personal product experience, convert it to a disclosed team perspective without claiming use or results.",
     "- Keep it concise and natural, with a maximum of 48 words and 360 characters. Do not include a link unless the opening comment explicitly asks for one.",
     "- Never replace requested prompt substance with a generic reaction merely to satisfy style rules.",
@@ -273,6 +275,9 @@ export async function generateTapInThreadPreview(
       }
       if (!lastProblem && !commentOnly) {
         lastProblem = youtubeCommentStyleProblem(reply, "reply", TAPIN_REPLY_STYLE);
+      }
+      if (!lastProblem && !commentOnly) {
+        lastProblem = youtubeRequestedCapabilityProblem(input.replyPrompt, reply);
       }
       if (!lastProblem && !commentOnly) {
         lastProblem = youtubeExactBrandMentionProblem(reply, input.brandName);

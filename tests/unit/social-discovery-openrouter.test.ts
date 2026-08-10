@@ -108,6 +108,7 @@ test("TapIn live prompt preserves campaign instructions that need factual capabi
 
   assert.match(prompt, /TapIn fidelity rule/i);
   assert.match(prompt, /preserve every safe requested intent/i);
+  assert.match(prompt, /include every requested capability/i);
   assert.match(prompt, /use up to 48 words/i);
   assert.match(prompt, /AI tests as customer personas/i);
   assert.match(prompt, /human testers return recordings and fixes/i);

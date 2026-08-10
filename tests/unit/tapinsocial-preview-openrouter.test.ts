@@ -125,14 +125,21 @@ test("TapIn follows the requested QA question and factual BeforeUsersDo reply", 
     assert.match(prompt, /AI does the QA as persona of your customer/i);
     assert.match(prompt, /human who tests your app/i);
     assert.match(prompt, /every safe instruction.*required substance/i);
+    if (requestCount === 2) {
+      assert.match(prompt, /omits the requested AI customer-persona QA capability/i);
+      assert.match(prompt, /include every requested capability/i);
+    }
 
+    const reply = requestCount === 1
+      ? "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Human testers can return recordings, fixes, and instructions for Codex or Claude."
+      : "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.";
     return new Response(
       JSON.stringify({
         choices: [{
           message: {
             content: JSON.stringify({
               openingComment: "How do people catch the bugs they miss after tutorials like this? Shipping an app and realizing QA missed things is brutal.",
-              reply: "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.",
+              reply,
             }),
           },
         }],
@@ -150,7 +157,7 @@ test("TapIn follows the requested QA question and factual BeforeUsersDo reply", 
       videoDescription: "A condensed vibe coding tutorial about building and shipping apps with AI.",
     });
 
-    assert.equal(requestCount, 1);
+    assert.equal(requestCount, 2);
     assert.match(preview.openingComment, /bugs.*tutorial|tutorial.*bugs/i);
     assert.match(preview.reply, /Fresh eyes/i);
     assert.match(preview.reply, /I work on BeforeUsersDo/i);

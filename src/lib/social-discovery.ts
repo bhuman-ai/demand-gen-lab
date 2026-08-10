@@ -19,6 +19,7 @@ import type {
   SocialDiscoveryPlatform,
   SocialDiscoveryPost,
   SocialDiscoveryProvider,
+  SocialDiscoverySurfaceType,
 } from "@/lib/social-discovery-types";
 import { resolveUnipilePostContext, type UnipileResolvedPostContext } from "@/lib/unipile";
 import {
@@ -1356,15 +1357,7 @@ function assetForIntent(intent: SocialDiscoveryIntent) {
 type InteractionTargetStrength = "target" | "watch" | "skip";
 type InteractionMentionPolicy = "no_mention" | "mention_only_if_asked" | "possible_soft_mention" | "never_mention";
 type InteractionCommentPosture = "method_first" | "empathy_first" | "question_first" | "watch_only" | "no_comment";
-type InteractionSurfaceType =
-  | "help_request"
-  | "personal_story"
-  | "complaint_thread"
-  | "advice_post"
-  | "brand_feature_post"
-  | "awareness_post"
-  | "news_or_political"
-  | "generic";
+type InteractionSurfaceType = SocialDiscoverySurfaceType;
 type EnrichedInteractionPlan = SocialDiscoveryPost["interactionPlan"] & {
   targetStrength: InteractionTargetStrength;
   commentPosture: InteractionCommentPosture;
@@ -1736,6 +1729,7 @@ function buildInteractionPlan(input: {
   const liveContent = asRecord(asRecord(input.post.raw).liveContent);
   return {
     headline: `${targetStrength} ${surfaceType.replace(/_/g, " ")} plan`,
+    surfaceType,
     domainProfile: input.contextFit.profile.replace(/_/g, " "),
     fitSummary:
       input.contextFit.profile === "generic"

@@ -7,8 +7,8 @@ import {
   normalizeSocialDiscoveryYouTubePolicy,
 } from "@/lib/social-discovery-youtube-policy";
 import {
+  buildTapInPreviewTargetExample,
   discoverTapInPreviewVideo,
-  tapInPreviewNoMatchError,
   type TapInPreviewDiscoveryResult,
 } from "@/lib/tapinsocial-preview-discovery";
 import { generateTapInThreadPreview } from "@/lib/tapinsocial-preview";
@@ -63,31 +63,17 @@ async function workspaceYouTubeSearchSecrets(workspace: Awaited<ReturnType<typeo
   return null;
 }
 
-function noMatchResponse(
-  discovery: TapInPreviewDiscoveryResult,
-  policy: NonNullable<ReturnType<typeof normalizeSocialDiscoveryYouTubePolicy>>
-) {
-  const everyQueryFailed = discovery.queryStats.length > 0 &&
-    discovery.queryStats.every((query) => Boolean(query.error));
-
-  if (everyQueryFailed) {
-    console.error("[tapin-preview] YouTube discovery failed", JSON.stringify({
-      queries: discovery.queries,
-      errors: discovery.errors.map((error) => ({ query: error.query, message: error.message })),
-    }));
-    return NextResponse.json(
-      {
-        error: "YouTube search could not run. Reconnect a YouTube account, then try again.",
-        errorCode: "youtube_search_failed",
-      },
-      { status: 502 }
-    );
-  }
-
-  const error = tapInPreviewNoMatchError(discovery, policy);
+function searchFailureResponse(discovery: TapInPreviewDiscoveryResult) {
+  console.error("[tapin-preview] YouTube discovery failed", JSON.stringify({
+    queries: discovery.queries,
+    errors: discovery.errors.map((error) => ({ query: error.query, message: error.message })),
+  }));
   return NextResponse.json(
-    { error: error.error, ...(error.errorCode ? { errorCode: error.errorCode } : {}) },
-    { status: error.status }
+    {
+      error: "YouTube search could not run. Reconnect a YouTube account, then try again.",
+      errorCode: "youtube_search_failed",
+    },
+    { status: 502 }
   );
 }
 
@@ -134,6 +120,7 @@ export async function POST(request: Request) {
       description: videoDescription,
       url: requiredText(body.videoUrl, 1000),
       matchedTarget: "",
+      matchQuality: "provided" as "provided" | "policy_match" | "best_available" | "target_example",
     };
 
     if (!video.title || !video.description) {
@@ -150,16 +137,23 @@ export async function POST(request: Request) {
       });
       const matchedVideo = discovery.post;
       if (!matchedVideo) {
-        return noMatchResponse(discovery, youtubeDiscoveryPolicy);
+        const everyQueryFailed = discovery.queryStats.length > 0 &&
+          discovery.queryStats.every((query) => Boolean(query.error));
+        if (everyQueryFailed) {
+          return searchFailureResponse(discovery);
+        }
+        video = buildTapInPreviewTargetExample({ campaignName, targets });
+      } else {
+        video = {
+          title: requiredText(matchedVideo.title, 400),
+          description:
+            requiredText(matchedVideo.body, 4000) ||
+            `YouTube video matched the campaign target “${requiredText(matchedVideo.query, 160)}”.`,
+          url: requiredText(matchedVideo.url, 1000),
+          matchedTarget: requiredText(matchedVideo.query, 160),
+          matchQuality: discovery.selectionMode ?? "best_available",
+        };
       }
-      video = {
-        title: requiredText(matchedVideo.title, 400),
-        description:
-          requiredText(matchedVideo.body, 4000) ||
-          `YouTube video matched the campaign target “${requiredText(matchedVideo.query, 160)}”.`,
-        url: requiredText(matchedVideo.url, 1000),
-        matchedTarget: requiredText(matchedVideo.query, 160),
-      };
     }
 
     const preview = await generateTapInThreadPreview({

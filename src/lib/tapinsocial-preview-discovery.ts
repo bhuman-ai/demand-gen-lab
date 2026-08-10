@@ -16,6 +16,7 @@ type DiscoveryFunction = typeof discoverYouTubeSearchPostsForBrand;
 
 export type TapInPreviewDiscoveryResult = {
   post: SocialDiscoveryPost | null;
+  selectionMode: "policy_match" | "best_available" | null;
   queries: string[];
   errors: YouTubeDiscoveryError[];
   queryStats: YouTubeDiscoveryQueryStats[];
@@ -37,6 +38,50 @@ function everyQueryFailed(discovery: DiscoveryResult) {
     discovery.queryStats.every((query) => Boolean(query.error));
 }
 
+function compareCandidates(left: SocialDiscoveryPost, right: SocialDiscoveryPost) {
+  if (left.relevanceScore !== right.relevanceScore) {
+    return right.relevanceScore - left.relevanceScore;
+  }
+  if (left.risingScore !== right.risingScore) {
+    return right.risingScore - left.risingScore;
+  }
+  if (left.engagementScore !== right.engagementScore) {
+    return right.engagementScore - left.engagementScore;
+  }
+  return left.providerRank - right.providerRank;
+}
+
+function bestCandidate(posts: SocialDiscoveryPost[]) {
+  const byVideo = new Map<string, SocialDiscoveryPost>();
+  for (const post of posts) {
+    const key = post.externalId || post.url || post.id;
+    const current = byVideo.get(key);
+    if (!current || compareCandidates(post, current) < 0) {
+      byVideo.set(key, post);
+    }
+  }
+  return [...byVideo.values()].sort(compareCandidates)[0] ?? null;
+}
+
+export function buildTapInPreviewTargetExample(input: {
+  campaignName: string;
+  targets: string[];
+}) {
+  const target = normalizedQueries(input.targets)[0] || "the campaign target";
+  const campaignName = String(input.campaignName ?? "").replace(/\s+/g, " ").trim();
+  return {
+    title: `Upcoming YouTube video about ${target}`.slice(0, 400),
+    description: [
+      `Representative future match about ${target}.`,
+      campaignName ? `TapIn will use the live campaign goal “${campaignName}” to rank new videos from best match down.` : "",
+      "This preview is hypothetical; TapIn will use a real eligible video when the campaign runs.",
+    ].filter(Boolean).join(" ").slice(0, 4000),
+    url: "",
+    matchedTarget: target.slice(0, 160),
+    matchQuality: "target_example" as const,
+  };
+}
+
 export async function discoverTapInPreviewVideo(input: {
   brand: BrandRecord;
   queries: string[];
@@ -54,6 +99,8 @@ export async function discoverTapInPreviewVideo(input: {
   let found = 0;
   let eligible = 0;
   let accepted = 0;
+  const policyMatches: SocialDiscoveryPost[] = [];
+  const fallbackCandidates: SocialDiscoveryPost[] = [];
 
   for (const query of queries) {
     const discoveryInput = {
@@ -74,25 +121,16 @@ export async function discoverTapInPreviewVideo(input: {
     found += discovery.summary.found;
     eligible += discovery.summary.eligible;
     accepted += discovery.summary.accepted;
-
-    if (discovery.posts[0]) {
-      return {
-        post: discovery.posts[0],
-        queries: queryStats.map((stats) => stats.query),
-        errors,
-        queryStats,
-        summary: {
-          ...discovery.summary,
-          found,
-          eligible,
-          accepted,
-        },
-      };
-    }
+    policyMatches.push(...discovery.posts);
+    fallbackCandidates.push(...discovery.candidates);
   }
 
+  const policyMatch = bestCandidate(policyMatches);
+  const fallbackMatch = policyMatch ? null : bestCandidate(fallbackCandidates);
+
   return {
-    post: null,
+    post: policyMatch ?? fallbackMatch,
+    selectionMode: policyMatch ? "policy_match" : fallbackMatch ? "best_available" : null,
     queries: queryStats.map((stats) => stats.query),
     errors,
     queryStats,
@@ -105,53 +143,5 @@ export async function discoverTapInPreviewVideo(input: {
       minRelevanceScore: input.policy.minRelevanceScore,
       minRisingScore: input.policy.minRisingScore,
     },
-  };
-}
-
-export function tapInPreviewNoMatchError(
-  discovery: TapInPreviewDiscoveryResult,
-  policy: SocialDiscoveryYouTubePolicy
-) {
-  const { found, eligible } = discovery.summary;
-  const topicCount = discovery.queryStats.length;
-  const everySearchFailed = topicCount > 0 &&
-    discovery.queryStats.every((query) => Boolean(query.error));
-
-  if (everySearchFailed) {
-    return {
-      error: "YouTube search could not run. Reconnect a YouTube account, then try again.",
-      errorCode: "youtube_search_failed",
-      status: 502,
-    };
-  }
-
-  const topicLabel = `${topicCount} topic${topicCount === 1 ? "" : "s"}`;
-  if (found === 0) {
-    return {
-      error: `TapIn checked ${topicLabel}, but YouTube returned no videos from the last ${policy.maxVideoAgeHours} hours. Increase video age or use a more specific topic.`,
-      status: 422,
-    };
-  }
-  if (eligible === 0) {
-    return {
-      error: `TapIn checked ${found} recent video${found === 1 ? "" : "s"} across ${topicLabel}, but none met the ${policy.minSubscriberCount.toLocaleString()} subscriber minimum. Lower that minimum and try again.`,
-      status: 422,
-    };
-  }
-
-  const looserSettings = [
-    policy.relevanceMode === "broad" ? "" : "Broad relevance",
-    policy.momentumMode === "any" ? "" : "Any momentum",
-  ].filter(Boolean);
-  if (looserSettings.length) {
-    return {
-      error: `TapIn checked ${found} recent videos across ${topicLabel}; ${eligible} passed the subscriber rule, but none passed the current relevance and momentum rules. Try ${looserSettings.join(" and ")}.`,
-      status: 422,
-    };
-  }
-
-  return {
-    error: `TapIn checked ${found} recent videos across ${topicLabel}; ${eligible} passed the subscriber rule, but this recent sample had no safe, close match. This is not all of YouTube. Try a more specific topic or increase video age.`,
-    status: 422,
   };
 }

@@ -165,7 +165,10 @@ export async function POST(request: Request) {
       videoDescription: video.description,
     });
     return NextResponse.json({ ok: true, preview, video });
-  } catch {
+  } catch (error) {
+    console.error("[tapin-preview] request failed", JSON.stringify({
+      reason: error instanceof Error ? error.message.slice(0, 800) : String(error).slice(0, 800),
+    }));
     return NextResponse.json(
       { error: "Preview generation is unavailable right now. Try again." },
       { status: 502 }

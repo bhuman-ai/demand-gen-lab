@@ -34,6 +34,41 @@ function normalizeGeneratedComment(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function fallbackVideoTopic(value: unknown) {
+  const topic = String(value ?? "")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[^\p{L}\p{N}'’ ]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 7)
+    .join(" ");
+  if (topic.length <= 90) return topic;
+  const shortened = compact(topic, 90);
+  return shortened.replace(/\s+\S*$/, "").trim() || shortened;
+}
+
+export function buildTapInPreviewFallback(
+  input: TapInThreadPreviewInput
+): TapInThreadPreview {
+  const topic = fallbackVideoTopic(input.videoTitle);
+  const openingComment = normalizeYouTubeCommentCapitalization(
+    topic
+      ? `There is a lot more to ${topic} once the practical details show up.`
+      : "The practical side of this gets complicated fast once the details matter."
+  );
+  if (input.campaignType === "comment") {
+    return { openingComment, reply: "" };
+  }
+
+  const brandName = sanitizeSocialCommentText(compact(input.brandName, 80));
+  const reply = normalizeYouTubeCommentCapitalization(
+    `The real challenge is applying it consistently. I work on ${brandName}, and this question comes up often.`
+  );
+  return { openingComment, reply };
+}
+
 export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
   if (input.campaignType === "comment") {
     return [
@@ -97,67 +132,74 @@ export async function generateTapInThreadPreview(
   const basePrompt = buildTapInPreviewPrompt(input);
   let lastProblem = "";
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const result = await generateJsonWithLlm({
-      task: "social_comment_planning",
-      prompt: attempt === 0
-        ? basePrompt
-        : [
-            basePrompt,
-            "",
-            `Regenerate from scratch. The previous draft was rejected because ${lastProblem}.`,
-            "Make both lines shorter, looser, and more ordinary. Do not reuse the prior wording.",
-          ].join("\n"),
-      format: {
-        type: "json_schema",
-        name: commentOnly ? "tapin_comment_preview" : "tapin_thread_preview",
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: commentOnly
-            ? { openingComment: { type: "string" } }
-            : { openingComment: { type: "string" }, reply: { type: "string" } },
-          required: commentOnly ? ["openingComment"] : ["openingComment", "reply"],
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const result = await generateJsonWithLlm({
+        task: "social_comment_planning",
+        prompt: attempt === 0
+          ? basePrompt
+          : [
+              basePrompt,
+              "",
+              `Regenerate from scratch. The previous draft was rejected because ${lastProblem}.`,
+              "Make both lines shorter, looser, and more ordinary. Do not reuse the prior wording.",
+            ].join("\n"),
+        format: {
+          type: "json_schema",
+          name: commentOnly ? "tapin_comment_preview" : "tapin_thread_preview",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: commentOnly
+              ? { openingComment: { type: "string" } }
+              : { openingComment: { type: "string" }, reply: { type: "string" } },
+            required: commentOnly ? ["openingComment"] : ["openingComment", "reply"],
+          },
         },
-      },
-      maxOutputTokens: 300,
-      reasoningEffort: "low",
-      providerOverride: "openrouter",
-      openRouterOverrideModel:
-        String(
-          process.env.OPENROUTER_MODEL_TAPIN_PREVIEW ??
-            process.env.OPENROUTER_MODEL_SOCIAL_COMMENT_PLANNING ??
-            ""
-        ).trim() || undefined,
-    });
+        maxOutputTokens: 300,
+        reasoningEffort: "low",
+        providerOverride: "openrouter",
+        openRouterOverrideModel:
+          String(
+            process.env.OPENROUTER_MODEL_TAPIN_PREVIEW ??
+              process.env.OPENROUTER_MODEL_SOCIAL_COMMENT_PLANNING ??
+              ""
+          ).trim() || undefined,
+      });
 
-    const parsed = JSON.parse(result.text) as Record<string, unknown>;
-    const openingComment = normalizeGeneratedComment(
-      normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(parsed.openingComment))
-    );
-    const reply = normalizeGeneratedComment(
-      normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(parsed.reply))
-    );
-    lastProblem = youtubeCommentStyleProblem(openingComment, "opening");
-    if (!lastProblem && !commentOnly) {
-      lastProblem = youtubeCommentStyleProblem(reply, "reply");
+      const parsed = JSON.parse(result.text) as Record<string, unknown>;
+      const openingComment = normalizeGeneratedComment(
+        normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(parsed.openingComment))
+      );
+      const reply = normalizeGeneratedComment(
+        normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(parsed.reply))
+      );
+      lastProblem = youtubeCommentStyleProblem(openingComment, "opening");
+      if (!lastProblem && !commentOnly) {
+        lastProblem = youtubeCommentStyleProblem(reply, "reply");
+      }
+      if (!lastProblem && !commentOnly) {
+        lastProblem = youtubeExactBrandMentionProblem(reply, input.brandName);
+      }
+      if (!lastProblem) {
+        lastProblem = youtubeBrandAffiliationProblem(openingComment, input.brandName) ||
+          youtubeBrandAffiliationProblem(reply, input.brandName);
+      }
+      if (!lastProblem) {
+        lastProblem = youtubeBrandIsIncidentalProblem(openingComment, input.brandName) ||
+          youtubeBrandIsIncidentalProblem(reply, input.brandName);
+      }
+      if (!lastProblem && openingComment && (commentOnly || reply)) {
+        return { openingComment, reply };
+      }
+      if (!lastProblem) lastProblem = "the thread was incomplete";
     }
-    if (!lastProblem && !commentOnly) {
-      lastProblem = youtubeExactBrandMentionProblem(reply, input.brandName);
-    }
-    if (!lastProblem) {
-      lastProblem = youtubeBrandAffiliationProblem(openingComment, input.brandName) ||
-        youtubeBrandAffiliationProblem(reply, input.brandName);
-    }
-    if (!lastProblem) {
-      lastProblem = youtubeBrandIsIncidentalProblem(openingComment, input.brandName) ||
-        youtubeBrandIsIncidentalProblem(reply, input.brandName);
-    }
-    if (!lastProblem && openingComment && (commentOnly || reply)) {
-      return { openingComment, reply };
-    }
-    if (!lastProblem) lastProblem = "the thread was incomplete";
+    throw new Error(`Preview generation did not sound like a native YouTube comment: ${lastProblem}.`);
+  } catch (error) {
+    console.error("[tapin-preview] generation failed; using deterministic fallback", JSON.stringify({
+      campaignType: commentOnly ? "comment" : "thread",
+      reason: error instanceof Error ? error.message.slice(0, 800) : String(error).slice(0, 800),
+    }));
+    return buildTapInPreviewFallback(input);
   }
-
-  throw new Error(`Preview generation did not sound like a native YouTube comment: ${lastProblem}.`);
 }

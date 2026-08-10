@@ -13,7 +13,7 @@ function openRouterResponse(value: Record<string, unknown>) {
   );
 }
 
-test("TapIn preview prompt contains only user copy instructions, output structure, and video context", () => {
+test("TapIn preview prompt reserves one separately supplied system punctuation rule", () => {
   const prompt = buildTapInPreviewPrompt({
     brandName: "BeforeUsersDo",
     openingPrompt: "Use my exact opening voice.",
@@ -22,25 +22,33 @@ test("TapIn preview prompt contains only user copy instructions, output structur
     videoDescription: "A walkthrough of building and shipping an app.",
   });
 
-  assert.match(prompt, /user's prompts.*sole authority/i);
+  assert.match(prompt, /user's prompts.*sole authority.*system punctuation rule supplied separately/i);
+  assert.doesNotMatch(prompt, /Never use em dashes/i);
   assert.match(prompt, /Opening prompt:\nUse my exact opening voice/i);
   assert.match(prompt, /Reply prompt:\nUse my exact reply voice/i);
   assert.match(prompt, /Matched YouTube video title:\nShipping an app with Codex/i);
   assert.doesNotMatch(
     prompt,
-    /viewer typing quickly|standard maximum|brand must|affiliation|em dashes|safe instruction|unsupported claim|marketing language|direct recommendation|maximum \d+ words|grounding/i
+    /viewer typing quickly|standard maximum|brand must|affiliation|safe instruction|unsupported claim|marketing language|direct recommendation|maximum \d+ words|grounding/i
   );
 });
 
-test("TapIn preview returns model copy without punctuation, capitalization, length, or brand rewriting", async () => {
+test("TapIn preview removes em dashes but preserves every other user-controlled copy choice", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   const openingComment = "my app shipped — bugs everywhere; what now?";
   const reply = "BeforeUsersDo first: I work on it, use AI personas, then send every recording + fix!!!";
   let requestCount = 0;
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_input, init) => {
     requestCount += 1;
+    const request = JSON.parse(String(init?.body ?? "{}")) as {
+      messages?: Array<{ role?: string; content?: string }>;
+    };
+    assert.deepEqual(request.messages?.[0], {
+      role: "system",
+      content: "Never use em dashes. Use commas, periods, or parentheses instead.",
+    });
     return openRouterResponse({ openingComment, reply });
   };
 
@@ -54,7 +62,10 @@ test("TapIn preview returns model copy without punctuation, capitalization, leng
     });
 
     assert.equal(requestCount, 1);
-    assert.deepEqual(preview, { openingComment, reply });
+    assert.deepEqual(preview, {
+      openingComment: "my app shipped, bugs everywhere; what now?",
+      reply,
+    });
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -70,10 +81,10 @@ test("TapIn retries only an incomplete output and adds no copy rules during repa
   globalThis.fetch = async (_input, init) => {
     requestCount += 1;
     const request = JSON.parse(String(init?.body ?? "{}")) as {
-      messages?: Array<{ content?: string }>;
+      messages?: Array<{ role?: string; content?: string }>;
     };
     if (requestCount === 2) {
-      const prompt = request.messages?.[0]?.content ?? "";
+      const prompt = request.messages?.find((message) => message.role === "user")?.content ?? "";
       assert.match(prompt, /structurally invalid because reply is empty/i);
       assert.match(prompt, /Do not change, reinterpret, or add to the user's copy instructions/i);
       assert.doesNotMatch(prompt, /brand.*aside|affiliation|maximum \d+ words|marketing language/i);

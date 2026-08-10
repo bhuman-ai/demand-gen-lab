@@ -1,4 +1,8 @@
 import { generateJsonWithLlm } from "@/lib/llm-json";
+import {
+  applyTapInSystemCopyRule,
+  TAPIN_SYSTEM_COPY_RULE,
+} from "@/lib/tapinsocial-copy";
 
 export type TapInThreadPreviewInput = {
   campaignType?: "comment" | "thread";
@@ -52,7 +56,7 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     commentOnly
       ? "Return JSON only with exactly one string key: openingComment."
       : "Return JSON only with exactly two string keys: openingComment and reply.",
-    "The user's prompts below are the sole authority for wording, style, perspective, brand mentions, and content.",
+    "The user's prompts below are the sole authority for wording, style, perspective, brand mentions, and content except for the single system punctuation rule supplied separately.",
     "Do not apply any additional copywriting rules.",
     "",
     "Opening prompt:",
@@ -82,6 +86,7 @@ export async function generateTapInThreadPreview(
     try {
       const result = await generateJsonWithLlm({
         task: "social_comment_planning",
+        systemPrompt: TAPIN_SYSTEM_COPY_RULE,
         prompt: attempt === 0
           ? basePrompt
           : structuralRepairPrompt({ basePrompt, commentOnly, previous, problem: lastProblem }),
@@ -110,8 +115,8 @@ export async function generateTapInThreadPreview(
 
       const parsed = JSON.parse(result.text) as Record<string, unknown>;
       previous = {
-        openingComment: text(parsed.openingComment),
-        reply: commentOnly ? "" : text(parsed.reply),
+        openingComment: applyTapInSystemCopyRule(parsed.openingComment),
+        reply: commentOnly ? "" : applyTapInSystemCopyRule(parsed.reply),
       };
       lastProblem = structuralProblem(commentOnly, previous);
       if (!lastProblem) return previous;

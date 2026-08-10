@@ -10,6 +10,10 @@ import {
 } from "@/lib/social-discovery-brand-mention";
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import {
+  applyTapInSystemCopyRule,
+  TAPIN_SYSTEM_COPY_RULE,
+} from "@/lib/tapinsocial-copy";
+import {
   sanitizeSocialCommentText,
   SOCIAL_COMMENT_PUNCTUATION_RULE,
 } from "@/lib/social-comment-text";
@@ -2098,7 +2102,7 @@ export function buildSocialCommentPlanningPrompt(input: {
       draftMode === "thread"
         ? "Return non-empty commentDraft and replyDraft strings."
         : "Return a non-empty commentDraft string and an empty replyDraft string.",
-      "The user's campaign instructions below are the sole authority for wording, style, perspective, brand mentions, and content.",
+      "The user's campaign instructions below are the sole authority for wording, style, perspective, brand mentions, and content except for the single system punctuation rule supplied separately.",
       "Do not apply any additional copywriting rules.",
       "Set shouldComment to true for this matched video.",
       "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, replyDraft, assetNeeded, riskNotes, exitRules.",
@@ -2207,9 +2211,11 @@ export function buildSocialCommentPlanningPrompt(input: {
 
 async function requestSocialCommentPlan(input: {
   prompt: string;
+  systemPrompt?: string;
 }) {
   const result = await generateJsonWithLlm({
     task: "social_comment_planning",
+    systemPrompt: input.systemPrompt,
     prompt: input.prompt,
     format: { type: "json_object" },
     maxOutputTokens: 700,
@@ -2307,9 +2313,12 @@ async function enhanceInteractionPlanWithLlm(
       "TapIn supplies the matched YouTube video title and description"
     );
     const replyMaxLength = 220;
-    const tapInDraft = (value: unknown) => String(value ?? "").trim();
+    const tapInDraft = applyTapInSystemCopyRule;
     let promptUsed = prompt;
-    let row = await requestSocialCommentPlan({ prompt: promptUsed });
+    let row = await requestSocialCommentPlan({
+      prompt: promptUsed,
+      systemPrompt: isTapInCampaign ? TAPIN_SYSTEM_COPY_RULE : undefined,
+    });
 
     let initialCommentDraft = isTapInCampaign
       ? tapInDraft(row.commentDraft)
@@ -2360,7 +2369,10 @@ async function enhanceInteractionPlanWithLlm(
             `Do not use generic side notes like 'we see that at ${brandName}' or 'we see that a lot at ${brandName}'.`,
             "Do not use a reusable template. Return JSON only.",
           ].join("\n");
-      row = await requestSocialCommentPlan({ prompt: promptUsed });
+      row = await requestSocialCommentPlan({
+        prompt: promptUsed,
+        systemPrompt: isTapInCampaign ? TAPIN_SYSTEM_COPY_RULE : undefined,
+      });
       initialCommentDraft = isTapInCampaign
         ? tapInDraft(row.commentDraft)
         : compactText(

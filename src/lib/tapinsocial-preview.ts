@@ -43,6 +43,73 @@ function normalizeGeneratedComment(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function buildRequestedCapabilityReply(input: TapInThreadPreviewInput) {
+  const prompt = input.replyPrompt;
+  const details: string[] = [];
+  if (/\bAI\b/i.test(prompt) && /\b(?:persona|customer)\b/i.test(prompt)) {
+    details.push("AI can test the app as customer personas");
+  }
+  if (/\bhuman\b/i.test(prompt) && /\btest(?:s|ed|er|ers|ing)?\b/i.test(prompt)) {
+    const outputs = [
+      /\brecordings?\b/i.test(prompt) ? "recordings" : "",
+      /\bfix(?:es|ed|ing)?\b/i.test(prompt) ? "fixes" : "",
+    ].filter(Boolean);
+    const codingAssistant = /\bCodex\b/i.test(prompt) && /\bClaude\b/i.test(prompt)
+      ? "Codex or Claude"
+      : /\bCodex\b/i.test(prompt)
+        ? "Codex"
+        : /\bClaude\b/i.test(prompt)
+          ? "Claude"
+          : "";
+    const returned = [
+      ...outputs,
+      codingAssistant ? `instructions for ${codingAssistant}` : "",
+    ].filter(Boolean);
+    details.push(
+      returned.length
+        ? `human testers can return ${returned.join(", ")}`
+        : "human testers can test the app directly"
+    );
+  }
+  if (!details.length) return "";
+
+  const brandName = sanitizeSocialCommentText(compact(input.brandName, 80));
+  const lead = /\bfresh eyes\b/i.test(prompt)
+    ? "Fresh eyes are usually what changes it."
+    : "Another perspective can catch what the builder misses.";
+  return normalizeGeneratedComment(
+    normalizeYouTubeCommentCapitalization(
+      sanitizeSocialCommentText(`${lead} I work on ${brandName}. ${details.join(", and ")}.`)
+    )
+  );
+}
+
+function hardPreviewProblem(input: TapInThreadPreviewInput, draft: TapInThreadPreview) {
+  const commentOnly = input.campaignType === "comment";
+  let problem = youtubeCommentStyleProblem(draft.openingComment, "opening", TAPIN_OPENING_STYLE);
+  if (!problem && !commentOnly) {
+    problem = youtubeCommentStyleProblem(draft.reply, "reply", TAPIN_REPLY_STYLE);
+  }
+  if (!problem && !commentOnly) {
+    problem = youtubeRequestedCapabilityProblem(input.replyPrompt, draft.reply);
+  }
+  if (!problem && !commentOnly) {
+    problem = youtubeExactBrandMentionProblem(draft.reply, input.brandName);
+  }
+  if (!problem) {
+    problem = youtubeBrandAffiliationProblem(draft.openingComment, input.brandName) ||
+      youtubeBrandAffiliationProblem(draft.reply, input.brandName);
+  }
+  if (!problem) {
+    problem = youtubeBrandIsIncidentalProblem(draft.openingComment, input.brandName) ||
+      youtubeBrandIsIncidentalProblem(draft.reply, input.brandName);
+  }
+  if (!problem && (!draft.openingComment || (!commentOnly && !draft.reply))) {
+    problem = "the thread was incomplete";
+  }
+  return problem;
+}
+
 function wordCount(value: string) {
   return value.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)?.length ?? 0;
 }
@@ -121,6 +188,7 @@ function repairPrompt(input: {
     `It failed validation because ${input.problem}.`,
     "Repair that exact problem while keeping every safe instruction from both campaign prompts and the concrete video reference.",
     "The reply must answer the opening comment before the brand aside. If the reply prompt asks for one or two factual capabilities, include every requested capability after disclosing the affiliation.",
+    "When the validation reason names a missing capability, the repaired reply must say that capability explicitly.",
     "Remove only direct recommendations, invented customer experience, result promises, unsupported claims, or superiority claims. Do not erase the requested topic, question, answer, or factual capability context just to shorten the draft.",
     input.attempt > 1
       ? "Use two plain, short sentences per line. Prefer a specific number, claim, or detail from the video over a broad summary."
@@ -261,27 +329,7 @@ export async function generateTapInThreadPreview(
         normalizeYouTubeCommentCapitalization(sanitizeSocialCommentText(parsed.reply))
       );
       previous = { openingComment, reply };
-      lastProblem = youtubeCommentStyleProblem(openingComment, "opening", TAPIN_OPENING_STYLE);
-      if (!lastProblem && !commentOnly) {
-        lastProblem = youtubeCommentStyleProblem(reply, "reply", TAPIN_REPLY_STYLE);
-      }
-      if (!lastProblem && !commentOnly) {
-        lastProblem = youtubeRequestedCapabilityProblem(input.replyPrompt, reply);
-      }
-      if (!lastProblem && !commentOnly) {
-        lastProblem = youtubeExactBrandMentionProblem(reply, input.brandName);
-      }
-      if (!lastProblem) {
-        lastProblem = youtubeBrandAffiliationProblem(openingComment, input.brandName) ||
-          youtubeBrandAffiliationProblem(reply, input.brandName);
-      }
-      if (!lastProblem) {
-        lastProblem = youtubeBrandIsIncidentalProblem(openingComment, input.brandName) ||
-          youtubeBrandIsIncidentalProblem(reply, input.brandName);
-      }
-      if (!lastProblem && (!openingComment || (!commentOnly && !reply))) {
-        lastProblem = "the thread was incomplete";
-      }
+      lastProblem = hardPreviewProblem(input, previous);
       if (!lastProblem) {
         lastSafePromptFaithfulDraft = { openingComment, reply };
         lastProblem = openingGroundingProblem({
@@ -300,6 +348,15 @@ export async function generateTapInThreadPreview(
         reason: lastProblem.slice(0, 800),
       }));
       return lastSafePromptFaithfulDraft;
+    }
+    const repairedReply = commentOnly ? "" : buildRequestedCapabilityReply(input);
+    const repairedDraft = { openingComment: previous.openingComment, reply: repairedReply };
+    if (repairedReply && !hardPreviewProblem(input, repairedDraft)) {
+      console.warn("[tapin-preview] using deterministic prompt-capability repair", JSON.stringify({
+        campaignType: "thread",
+        reason: lastProblem.slice(0, 800),
+      }));
+      return repairedDraft;
     }
     throw new Error(`Preview generation did not sound like a native YouTube comment: ${lastProblem}.`);
   } catch (error) {

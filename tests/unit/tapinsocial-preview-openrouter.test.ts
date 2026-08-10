@@ -171,6 +171,56 @@ test("TapIn follows the requested QA question and factual BeforeUsersDo reply", 
   }
 });
 
+test("TapIn deterministically repairs repeated model omissions of requested capabilities", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  const originalConsoleWarn = console.warn;
+  let requestCount = 0;
+  const warnings: string[] = [];
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    return new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              openingComment: "How do people catch bugs after following a Codex tutorial like this? Testing and QA still feel impossible.",
+              reply: "Fresh eyes matter. I work on BeforeUsersDo, and human testers return recordings and fixes for Claude.",
+            }),
+          },
+        }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  };
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      brandName: "BeforeUsersDo",
+      openingPrompt: "Ask how people handle testing and QA after following this Codex tutorial and shipping apps with bugs.",
+      replyPrompt: "Say fresh eyes matter. Mention BeforeUsersDo. AI does QA as customer personas, and human testers return recordings, fixes, and instrucitons for Codex or Claude.",
+      videoTitle: "Codex is INSANE - Everything New in 10 Minutes",
+      videoDescription: "A breakdown of GPT capabilities inside the Codex application.",
+    });
+
+    assert.equal(requestCount, 3);
+    assert.match(preview.openingComment, /Codex tutorial/i);
+    assert.match(preview.reply, /Fresh eyes/i);
+    assert.match(preview.reply, /I work on BeforeUsersDo/i);
+    assert.match(preview.reply, /AI can test the app as customer personas/i);
+    assert.match(preview.reply, /human testers.*recordings.*fixes.*Codex or Claude/i);
+    assert.doesNotMatch(preview.reply, /same problem here|I had this problem/i);
+    assert.match(warnings.join("\n"), /deterministic prompt-capability repair/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalConsoleWarn;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
 test("TapIn preview retries polished mini-essays", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;

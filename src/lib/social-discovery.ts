@@ -28,6 +28,7 @@ import {
   youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
+  youtubeRequestedCapabilityProblem,
 } from "@/lib/youtube-comment-style";
 
 type DiscoveryError = {
@@ -2092,7 +2093,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Use the following campaign instructions for commentDraft and, in thread mode, replyDraft:",
     brandCommentPrompt,
     isTapInCampaign
-      ? "TapIn fidelity rule: preserve every safe requested intent in the opening and delayed-reply instructions. If those instructions request factual capabilities, include at most two concise details after disclosing affiliation. Remove invented experience, recommendations, guarantees, and unsupported claims, but never substitute unrelated generic copy."
+      ? "TapIn fidelity rule: preserve every safe requested intent in the opening and delayed-reply instructions. If those instructions request one or two factual capabilities, include every requested capability after disclosing affiliation. Remove invented experience, recommendations, guarantees, and unsupported claims, but never substitute unrelated generic copy."
       : "",
     SOCIAL_COMMENT_PUNCTUATION_RULE,
     forceDraft
@@ -2191,6 +2192,7 @@ async function requestSocialCommentPlan(input: {
 
 function youtubeDraftProblem(input: {
   allowFactualBrandContext: boolean;
+  campaignInstructions: string;
   platform: SocialDiscoveryPlatform;
   forceDraft: boolean;
   draftMode: "solo" | "thread";
@@ -2213,10 +2215,22 @@ function youtubeDraftProblem(input: {
       input.replyDraft,
       "reply",
       input.allowFactualBrandContext
-        ? { allowFactualBrandContext: true, maxCharacters: 360, maxWords: 48 }
+        ? {
+            allowFactualBrandContext: true,
+            disallowPersonalExperience: true,
+            maxCharacters: 360,
+            maxWords: 48,
+          }
         : undefined
     );
     if (replyStyleProblem) return replyStyleProblem;
+    if (input.allowFactualBrandContext) {
+      const capabilityProblem = youtubeRequestedCapabilityProblem(
+        input.campaignInstructions,
+        input.replyDraft
+      );
+      if (capabilityProblem) return capabilityProblem;
+    }
   }
   const affiliationProblem =
     youtubeBrandAffiliationProblem(input.commentDraft, input.brandName) ||
@@ -2278,6 +2292,7 @@ async function enhanceInteractionPlanWithLlm(
     const initialProblem = rowShouldComment
       ? youtubeDraftProblem({
           allowFactualBrandContext: isTapInCampaign,
+          campaignInstructions: input.brand.socialDiscoveryCommentPrompt,
           platform: input.post.platform,
           forceDraft: Boolean(options?.force),
           draftMode,
@@ -2299,7 +2314,7 @@ async function enhanceInteractionPlanWithLlm(
         `${brandName} should be context, not conclusion.`,
         `Do not append a standalone ${brandName} sentence.`,
         isTapInCampaign
-          ? `If the campaign instructions explicitly request factual ${brandName} capabilities, keep at most two concise details after disclosing the affiliation. Do not recommend it or claim results.`
+          ? `If the campaign instructions explicitly request one or two factual ${brandName} capabilities, include every requested capability after disclosing the affiliation. Do not recommend it or claim results.`
           : `Do not explain what ${brandName} does unless the video directly calls for it.`,
         `Do not use generic side notes like 'we see that at ${brandName}' or 'we see that a lot at ${brandName}'.`,
         "Do not use a reusable template. Return JSON only.",
@@ -2336,6 +2351,7 @@ async function enhanceInteractionPlanWithLlm(
     const finalProblem = shouldComment
       ? youtubeDraftProblem({
           allowFactualBrandContext: isTapInCampaign,
+          campaignInstructions: input.brand.socialDiscoveryCommentPrompt,
           platform: input.post.platform,
           forceDraft,
           draftMode,

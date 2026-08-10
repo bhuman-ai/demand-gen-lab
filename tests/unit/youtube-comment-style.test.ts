@@ -7,6 +7,7 @@ import {
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeExactBrandMentionProblem,
+  youtubeRequestedCapabilityProblem,
 } from "../../src/lib/youtube-comment-style";
 
 test("accepts short native YouTube comments and replies", () => {
@@ -31,6 +32,39 @@ test("TapIn can preserve concise factual capability context without weakening de
       maxCharacters: 360,
       maxWords: 48,
     }),
+    ""
+  );
+});
+
+test("TapIn rejects invented experience and missing requested capabilities", () => {
+  const options = {
+    allowFactualBrandContext: true,
+    disallowPersonalExperience: true,
+    maxCharacters: 360,
+    maxWords: 48,
+  };
+  assert.match(
+    youtubeCommentStyleProblem(
+      "Yeah same problem here. Fresh eyes matter. I work on BeforeUsersDo and human testers send recordings and fixes.",
+      "reply",
+      options
+    ),
+    /invents personal or customer experience/i
+  );
+
+  const instructions = "Use fresh eyes. AI does QA as a customer persona, and human testers return recordings and fixes for Codex or Claude.";
+  assert.match(
+    youtubeRequestedCapabilityProblem(
+      instructions,
+      "Fresh eyes matter. I work on BeforeUsersDo and human testers send recordings and fixes for Claude."
+    ),
+    /omits the requested AI customer-persona QA capability/i
+  );
+  assert.equal(
+    youtubeRequestedCapabilityProblem(
+      instructions,
+      "Fresh eyes matter. I work on BeforeUsersDo. AI tests as customer personas, and human testers send recordings and fixes for Claude."
+    ),
     ""
   );
 });

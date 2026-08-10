@@ -2,6 +2,7 @@ export type YouTubeCommentRole = "opening" | "reply";
 
 export type YouTubeCommentStyleOptions = {
   allowFactualBrandContext?: boolean;
+  disallowPersonalExperience?: boolean;
   maxCharacters?: number;
   maxWords?: number;
 };
@@ -11,7 +12,7 @@ export const YOUTUBE_NATIVE_COMMENT_STYLE_RULES = [
   "- Write like a viewer typing quickly, not a brand, marketer, consultant, or AI assistant.",
   "- Opening comment: usually 4 to 22 words, standard maximum 32 words and three short sentences.",
   "- Reply: usually 4 to 22 words, standard maximum 30 words and three short sentences.",
-  "- When campaign instructions require a specific question or factual capability detail, preserve that substance and stay within the campaign-specific limit instead of replacing it with generic copy.",
+  "- When campaign instructions require a specific question or one or two factual capability details, preserve every requested detail and stay within the campaign-specific limit instead of replacing it with generic copy.",
   "- Start with the reaction. Skip polite setup, explanation, summary, lesson, and conclusion.",
   "- Stay on one conversational thread. A quick topic reaction, one personal aside, and a genuine question can coexist.",
   "- Use natural capitalization. Capitalize the opening word, standalone 'I', and the first word after a sentence-ending period, question mark, or exclamation point.",
@@ -80,6 +81,12 @@ export function youtubeCommentStyleProblem(
   if (/^[\s\"'([{]*[a-z]/.test(text)) return `${role} begins with lowercase text`;
   if (/\bi\b/.test(text)) return `${role} uses lowercase standalone I`;
   if (/[.!?]\s+[a-z]/.test(text)) return `${role} starts a new sentence with lowercase text`;
+  if (
+    options.disallowPersonalExperience &&
+    /\b(?:same problem here|same issue here|i (?:had|have had|ran into|dealt with|struggled with) (?:this|that|the same)(?: problem| issue)?|i(?:'ve| have) (?:used|tried|tested)\b)/i.test(text)
+  ) {
+    return `${role} invents personal or customer experience`;
+  }
 
   const formalPattern = FORMAL_OR_SALESY_PATTERNS.find(
     ({ allowWithFactualBrandContext, pattern }) =>
@@ -87,6 +94,47 @@ export function youtubeCommentStyleProblem(
   );
   if (formalPattern) return `${role} uses ${formalPattern.label}`;
   return "";
+}
+
+export function youtubeRequestedCapabilityProblem(instructions: unknown, value: unknown) {
+  const prompt = String(instructions ?? "").replace(/\s+/g, " ").trim();
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!prompt || !text) return "";
+
+  const requirements = [
+    {
+      label: "the requested fresh-eyes answer",
+      requested: /\bfresh eyes\b/i.test(prompt),
+      present: /\bfresh eyes\b/i.test(text),
+    },
+    {
+      label: "the requested AI customer-persona QA capability",
+      requested: /\bAI\b/i.test(prompt) && /\b(?:persona|customer)\b/i.test(prompt),
+      present: /\bAI\b/i.test(text) && /\b(?:persona|customer)\b/i.test(text),
+    },
+    {
+      label: "the requested human-testing capability",
+      requested: /\bhuman\b/i.test(prompt) && /\btest(?:s|ed|er|ers|ing)?\b/i.test(prompt),
+      present: /\bhuman\b/i.test(text) && /\btest(?:s|ed|er|ers|ing)?\b/i.test(text),
+    },
+    {
+      label: "the requested test recordings",
+      requested: /\brecordings?\b/i.test(prompt),
+      present: /\brecordings?\b/i.test(text),
+    },
+    {
+      label: "the requested fixes",
+      requested: /\bfix(?:es|ed|ing)?\b/i.test(prompt),
+      present: /\bfix(?:es|ed|ing)?\b/i.test(text),
+    },
+    {
+      label: "the requested Codex or Claude handoff",
+      requested: /\b(?:Codex|Claude)\b/i.test(prompt),
+      present: /\b(?:Codex|Claude)\b/i.test(text),
+    },
+  ];
+  const missing = requirements.find((requirement) => requirement.requested && !requirement.present);
+  return missing ? `reply omits ${missing.label}` : "";
 }
 
 export function normalizeYouTubeCommentCapitalization(value: unknown) {

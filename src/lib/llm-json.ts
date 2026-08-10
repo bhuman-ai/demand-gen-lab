@@ -328,6 +328,7 @@ async function callAndRecordLlmJson(input: {
 async function callOpenAiResponses(input: {
   task: LlmTask;
   prompt: string;
+  systemPrompt?: string;
   format: LlmJsonFormat;
   maxOutputTokens: number;
   reasoningEffort: string;
@@ -349,6 +350,7 @@ async function callOpenAiResponses(input: {
     },
     body: JSON.stringify({
       model,
+      ...(input.systemPrompt ? { instructions: input.systemPrompt } : {}),
       input: input.prompt,
       reasoning: { effort: input.reasoningEffort },
       text: { format: openAiTextFormat(input.format) },
@@ -377,6 +379,7 @@ async function callOpenAiResponses(input: {
 async function callOpenRouterChat(input: {
   task: LlmTask;
   prompt: string;
+  systemPrompt?: string;
   format: LlmJsonFormat;
   maxOutputTokens: number;
   overrideModel?: string;
@@ -387,15 +390,24 @@ async function callOpenRouterChat(input: {
     throw new Error("OPENROUTER_API_KEY is not configured.");
   }
   const model = resolveOpenRouterModel(input.task, input.overrideModel);
+  const messages = [
+    ...(input.systemPrompt ? [{ role: "system", content: input.systemPrompt }] : []),
+    {
+      role: "user",
+      content: input.looseJson
+        ? looseJsonPrompt({ prompt: input.prompt, format: input.format })
+        : input.prompt,
+    },
+  ];
   const body = input.looseJson
     ? {
         model,
-        messages: [{ role: "user", content: looseJsonPrompt({ prompt: input.prompt, format: input.format }) }],
+        messages,
         max_tokens: input.maxOutputTokens,
       }
     : {
         model,
-        messages: [{ role: "user", content: input.prompt }],
+        messages,
         response_format: openRouterResponseFormat(input.format),
         max_tokens: input.maxOutputTokens,
         provider: { require_parameters: true },
@@ -431,6 +443,7 @@ async function callOpenRouterChat(input: {
 export async function generateJsonWithLlm(input: {
   task: LlmTask;
   prompt: string;
+  systemPrompt?: string;
   format: LlmJsonFormat;
   maxOutputTokens: number;
   reasoningEffort?: string;
@@ -458,6 +471,7 @@ export async function generateJsonWithLlm(input: {
           callOpenRouterChat({
             task: input.task,
             prompt: input.prompt,
+            systemPrompt: input.systemPrompt,
             format: input.format,
             maxOutputTokens: input.maxOutputTokens,
             overrideModel: input.openRouterOverrideModel,
@@ -481,6 +495,7 @@ export async function generateJsonWithLlm(input: {
               callOpenRouterChat({
                 task: input.task,
                 prompt: input.prompt,
+                systemPrompt: input.systemPrompt,
                 format: input.format,
                 maxOutputTokens: input.maxOutputTokens,
                 overrideModel: input.openRouterOverrideModel,
@@ -520,6 +535,7 @@ export async function generateJsonWithLlm(input: {
           callOpenAiResponses({
             task: input.task,
             prompt: input.prompt,
+            systemPrompt: input.systemPrompt,
             format: input.format,
             maxOutputTokens: input.maxOutputTokens,
             reasoningEffort,
@@ -546,6 +562,7 @@ export async function generateJsonWithLlm(input: {
         callOpenAiResponses({
           task: input.task,
           prompt: input.prompt,
+          systemPrompt: input.systemPrompt,
           format: input.format,
           maxOutputTokens: input.maxOutputTokens,
           reasoningEffort,
@@ -572,6 +589,7 @@ export async function generateJsonWithLlm(input: {
         callOpenAiResponses({
           task: input.task,
           prompt: input.prompt,
+          systemPrompt: input.systemPrompt,
           format: input.format,
           maxOutputTokens: input.maxOutputTokens,
           reasoningEffort,
@@ -597,6 +615,7 @@ export async function generateJsonWithLlm(input: {
           callOpenRouterChat({
             task: input.task,
             prompt: input.prompt,
+            systemPrompt: input.systemPrompt,
             format: input.format,
             maxOutputTokens: input.maxOutputTokens,
             overrideModel: input.openRouterOverrideModel,
@@ -617,6 +636,7 @@ export async function generateJsonWithLlm(input: {
           callOpenRouterChat({
             task: input.task,
             prompt: input.prompt,
+            systemPrompt: input.systemPrompt,
             format: input.format,
             maxOutputTokens: input.maxOutputTokens,
             overrideModel: input.openRouterOverrideModel,

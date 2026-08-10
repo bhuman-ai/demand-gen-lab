@@ -87,7 +87,7 @@ test("thread prompt requires a real reply or rejects the whole opportunity", () 
   assert.doesNotMatch(prompt, /leave it empty if fake or unnecessary/i);
 });
 
-test("TapIn live prompt makes the user's campaign instructions the sole copy authority", () => {
+test("TapIn live prompt reserves one separately supplied system punctuation rule", () => {
   const tapInBrand = {
     ...brand(),
     name: "BeforeUsersDo",
@@ -107,7 +107,8 @@ test("TapIn live prompt makes the user's campaign instructions the sole copy aut
     mode: "thread",
   });
 
-  assert.match(prompt, /campaign instructions.*sole authority/i);
+  assert.match(prompt, /campaign instructions.*sole authority.*system punctuation rule supplied separately/i);
+  assert.doesNotMatch(prompt, /Never use em dashes/i);
   assert.match(prompt, /Do not apply any additional copywriting rules/i);
   assert.match(prompt, /AI tests as customer personas/i);
   assert.match(prompt, /human testers return recordings and fixes/i);
@@ -115,11 +116,11 @@ test("TapIn live prompt makes the user's campaign instructions the sole copy aut
   assert.doesNotMatch(prompt, /TapIn supplies the matched YouTube/i);
   assert.doesNotMatch(
     prompt,
-    /TapIn fidelity rule|viewer typing quickly|standard maximum|brand must|affiliation|em dashes|safe requested intent|marketing language|mention policy|under \d+ words|use up to \d+ words/i
+    /TapIn fidelity rule|viewer typing quickly|standard maximum|brand must|affiliation|safe requested intent|marketing language|mention policy|under \d+ words|use up to \d+ words/i
   );
 });
 
-test("TapIn live generation returns user-controlled copy without rewriting or validation", async () => {
+test("TapIn live generation removes em dashes but preserves every other user-controlled choice", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   let requestCount = 0;
@@ -130,20 +131,27 @@ test("TapIn live generation returns user-controlled copy without rewriting or va
       "Opening comment instructions:",
       "Write exactly: my app shipped — bugs everywhere; what now?",
       "Delayed reply instructions:",
-      "Write exactly: BeforeUsersDo first: I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
+      "Write exactly: BeforeUsersDo first—I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
       "Runtime context:",
       "TapIn supplies the matched YouTube video title and description to the generator automatically.",
     ].join("\n"),
   };
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_input, init) => {
     requestCount += 1;
+    const request = JSON.parse(String(init?.body ?? "{}")) as {
+      messages?: Array<{ role?: string; content?: string }>;
+    };
+    assert.deepEqual(request.messages?.[0], {
+      role: "system",
+      content: "Never use em dashes. Use commas, periods, or parentheses instead.",
+    });
     return openRouterResponse({
       headline: "QA after vibe coding",
       fitSummary: "The video is about building and shipping apps with AI.",
       shouldComment: true,
       commentDraft: "my app shipped — bugs everywhere; what now?",
-      replyDraft: "BeforeUsersDo first: I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
+      replyDraft: "BeforeUsersDo first—I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
       assetNeeded: "",
       riskNotes: [],
       exitRules: [],
@@ -162,11 +170,11 @@ test("TapIn live generation returns user-controlled copy without rewriting or va
     assert.equal(drafted.interactionPlan.sequence.length, 2);
     assert.equal(
       drafted.interactionPlan.sequence[0]?.draft,
-      "my app shipped — bugs everywhere; what now?"
+      "my app shipped, bugs everywhere; what now?"
     );
     assert.equal(
       drafted.interactionPlan.sequence[1]?.draft,
-      "BeforeUsersDo first: I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!"
+      "BeforeUsersDo first, I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!"
     );
   } finally {
     globalThis.fetch = originalFetch;

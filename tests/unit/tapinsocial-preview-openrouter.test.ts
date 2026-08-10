@@ -2,9 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildTapInPreviewFallback,
   buildTapInPreviewPrompt,
   generateTapInThreadPreview,
 } from "../../src/lib/tapinsocial-preview";
+import {
+  youtubeBrandAffiliationProblem,
+  youtubeBrandIsIncidentalProblem,
+  youtubeCommentStyleProblem,
+  youtubeExactBrandMentionProblem,
+} from "../../src/lib/youtube-comment-style";
 
 test("TapIn preview prompt explicitly bans long dashes", () => {
   const prompt = buildTapInPreviewPrompt({
@@ -203,6 +210,61 @@ test("comment-only preview does not require or return a reply", async () => {
     assert.equal(preview.reply, "");
   } finally {
     globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
+test("TapIn fallback stays native and transparent for a thread", () => {
+  const preview = buildTapInPreviewFallback({
+    brandName: "SafeAgain",
+    openingPrompt: "React naturally.",
+    replyPrompt: "Mention SafeAgain as a personal aside.",
+    videoTitle: "Women's safety and street harassment prevention",
+    videoDescription: "Practical bystander intervention advice.",
+  });
+
+  assert.equal(youtubeCommentStyleProblem(preview.openingComment, "opening"), "");
+  assert.equal(youtubeCommentStyleProblem(preview.reply, "reply"), "");
+  assert.equal(youtubeExactBrandMentionProblem(preview.reply, "SafeAgain"), "");
+  assert.equal(youtubeBrandAffiliationProblem(preview.reply, "SafeAgain"), "");
+  assert.equal(youtubeBrandIsIncidentalProblem(preview.reply, "SafeAgain"), "");
+});
+
+test("TapIn returns a usable comment preview when OpenRouter is unavailable", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  const originalConsoleError = console.error;
+  let requestCount = 0;
+  const errors: string[] = [];
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    return new Response(JSON.stringify({ error: { message: "provider unavailable" } }), {
+      status: 503,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  console.error = (...args: unknown[]) => errors.push(args.map(String).join(" "));
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      campaignType: "comment",
+      brandName: "SafeAgain",
+      openingPrompt: "React naturally to the video.",
+      replyPrompt: "",
+      videoTitle: "Women's safety and street harassment prevention",
+      videoDescription: "Practical bystander intervention advice.",
+    });
+
+    assert.equal(requestCount, 2);
+    assert.equal(preview.reply, "");
+    assert.ok(preview.openingComment.length > 0);
+    assert.equal(youtubeCommentStyleProblem(preview.openingComment, "opening"), "");
+    assert.match(errors.join("\n"), /using deterministic fallback/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
   }

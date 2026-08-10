@@ -36,6 +36,7 @@ function normalizeGeneratedComment(value: unknown) {
 
 function fallbackVideoTopic(value: unknown) {
   const topic = String(value ?? "")
+    .replace(/^(?:upcoming\s+)?youtube\s+video\s+about\s+/i, "")
     .replace(/https?:\/\/\S+/gi, " ")
     .replace(/[^\p{L}\p{N}'’ ]+/gu, " ")
     .replace(/\s+/g, " ")
@@ -55,7 +56,7 @@ export function buildTapInPreviewFallback(
   const topic = fallbackVideoTopic(input.videoTitle);
   const openingComment = normalizeYouTubeCommentCapitalization(
     topic
-      ? `There is a lot more to ${topic} once the practical details show up.`
+      ? `The practical details around ${topic} matter more than they first seem.`
       : "The practical side of this gets complicated fast once the details matter."
   );
   if (input.campaignType === "comment") {

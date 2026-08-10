@@ -220,10 +220,14 @@ test("TapIn fallback stays native and transparent for a thread", () => {
     brandName: "SafeAgain",
     openingPrompt: "React naturally.",
     replyPrompt: "Mention SafeAgain as a personal aside.",
-    videoTitle: "Women's safety and street harassment prevention",
+    videoTitle: "Upcoming YouTube video about women's safety",
     videoDescription: "Practical bystander intervention advice.",
   });
 
+  assert.equal(
+    preview.openingComment,
+    "The practical details around women's safety matter more than they first seem."
+  );
   assert.equal(youtubeCommentStyleProblem(preview.openingComment, "opening"), "");
   assert.equal(youtubeCommentStyleProblem(preview.reply, "reply"), "");
   assert.equal(youtubeExactBrandMentionProblem(preview.reply, "SafeAgain"), "");

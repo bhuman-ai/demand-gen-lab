@@ -109,6 +109,7 @@ test("TapIn live prompt preserves campaign instructions that need factual capabi
   assert.match(prompt, /TapIn fidelity rule/i);
   assert.match(prompt, /preserve every safe requested intent/i);
   assert.match(prompt, /include every requested capability/i);
+  assert.doesNotMatch(prompt, /after disclosing|identify the affiliation|small disclosed aside/i);
   assert.match(prompt, /use up to 48 words/i);
   assert.match(prompt, /AI tests as customer personas/i);
   assert.match(prompt, /human testers return recordings and fixes/i);
@@ -117,6 +118,7 @@ test("TapIn live prompt preserves campaign instructions that need factual capabi
 test("TapIn live generation keeps a prompt-faithful factual reply beyond the default limit", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  let requestCount = 0;
   const tapInBrand = {
     ...brand(),
     name: "BeforeUsersDo",
@@ -129,16 +131,21 @@ test("TapIn live generation keeps a prompt-faithful factual reply beyond the def
     ].join("\n"),
   };
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-  globalThis.fetch = async () => openRouterResponse({
-    headline: "QA after vibe coding",
-    fitSummary: "The video is about building and shipping apps with AI.",
-    shouldComment: true,
-    commentDraft: "How do people catch the bugs they miss after tutorials like this? Shipping an app and realizing QA missed things is brutal.",
-    replyDraft: "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.",
-    assetNeeded: "",
-    riskNotes: [],
-    exitRules: [],
-  });
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    return openRouterResponse({
+      headline: "QA after vibe coding",
+      fitSummary: "The video is about building and shipping apps with AI.",
+      shouldComment: true,
+      commentDraft: "How do people catch the bugs they miss after tutorials like this? Shipping an app and realizing QA missed things is brutal.",
+      replyDraft: requestCount === 1
+        ? "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude."
+        : "Fresh eyes are usually what changes it. BeforeUsersDo uses AI to test apps as customer personas, and connects you with human testers who return recordings, fixes, and instructions for Codex or Claude.",
+      assetNeeded: "",
+      riskNotes: [],
+      exitRules: [],
+    });
+  };
 
   try {
     const drafted = await refreshSocialDiscoveryCommentDraft({
@@ -148,11 +155,12 @@ test("TapIn live generation keeps a prompt-faithful factual reply beyond the def
       mode: "thread",
     });
 
+    assert.equal(requestCount, 2);
     assert.equal(drafted.interactionPlan.sequence.length, 2);
     assert.match(drafted.interactionPlan.sequence[0]?.draft ?? "", /bugs.*tutorial|tutorial.*bugs/i);
     assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /Fresh eyes/i);
-    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /I work on BeforeUsersDo/i);
-    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /AI tests apps as customer personas/i);
+    assert.doesNotMatch(drafted.interactionPlan.sequence[1]?.draft ?? "", /I work on/i);
+    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /uses AI to test apps as customer personas/i);
     assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /human testers.*recordings.*fixes.*Codex or Claude/i);
   } finally {
     globalThis.fetch = originalFetch;
@@ -178,7 +186,7 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
       fitSummary: "The video directly discusses personalized outreach.",
       shouldComment: true,
       commentDraft: "personalization without sounding robotic is the hard part—especially at scale",
-      replyDraft: "outreach still feels awkward. i work on BHuman and we started with this exact headache",
+      replyDraft: "outreach still feels awkward. BHuman fits the personalization part without taking over the conversation",
       assetNeeded: "",
       riskNotes: [],
       exitRules: [],
@@ -199,7 +207,7 @@ test("forced TapIn thread generation uses OpenRouter and returns both drafts", a
       drafted.interactionPlan.sequence[0]?.draft,
       "Personalization without sounding robotic is the hard part, especially at scale"
     );
-    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "Outreach still feels awkward. I work on BHuman and we started with this exact headache");
+    assert.equal(drafted.interactionPlan.sequence[1]?.draft, "Outreach still feels awkward. BHuman fits the personalization part without taking over the conversation");
     assert.equal(drafted.interactionPlan.generationPromptMode, "auto");
   } finally {
     globalThis.fetch = originalFetch;
@@ -219,7 +227,7 @@ test("social comment prompt explicitly bans long dashes", () => {
   });
   assert.match(prompt, /Never use em dashes or en dashes/i);
   assert.match(prompt, /standard maximum 32 words/i);
-  assert.match(prompt, /small (?:disclosed )?aside/i);
+  assert.match(prompt, /small aside/i);
   assert.doesNotMatch(prompt, /heuristic_comment:/i);
 });
 

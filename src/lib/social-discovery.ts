@@ -25,10 +25,10 @@ import { resolveUnipilePostContext, type UnipileResolvedPostContext } from "@/li
 import {
   YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
   normalizeYouTubeCommentCapitalization,
-  youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeRequestedCapabilityProblem,
+  youtubeUnrequestedBrandAffiliationProblem,
 } from "@/lib/youtube-comment-style";
 
 type DiscoveryError = {
@@ -2093,7 +2093,7 @@ export function buildSocialCommentPlanningPrompt(input: {
     "Use the following campaign instructions for commentDraft and, in thread mode, replyDraft:",
     brandCommentPrompt,
     isTapInCampaign
-      ? "TapIn fidelity rule: preserve every safe requested intent in the opening and delayed-reply instructions. If those instructions request one or two factual capabilities, include every requested capability after disclosing affiliation. Remove invented experience, recommendations, guarantees, and unsupported claims, but never substitute unrelated generic copy."
+      ? "TapIn fidelity rule: preserve every safe requested intent in the opening and delayed-reply instructions. If those instructions request one or two factual capabilities, include every requested capability using the perspective those instructions request. Remove invented experience, recommendations, guarantees, and unsupported claims, but never substitute unrelated generic copy."
       : "",
     SOCIAL_COMMENT_PUNCTUATION_RULE,
     forceDraft
@@ -2109,10 +2109,10 @@ export function buildSocialCommentPlanningPrompt(input: {
       ? [
           YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
           "- Allowed shapes: quick agreement, quick disagreement, one question, one clarification, one tiny takeaway, one request, one example.",
-          "- Keep one conversational thread. When the brand is required, a topic reaction + small disclosed aside + optional question is one valid shape. Never combine praise + recap + pitch.",
+          "- Keep one conversational thread. When the brand is required, a topic reaction + small aside + optional question is one valid shape. Never combine praise + recap + pitch.",
           "- Do not sound like you are trying to teach the audience or summarize the whole video.",
           `- ${forceDraft ? `Mention ${brandName} exactly once and keep it incidental and ordinary.` : contextualMentionRule}`,
-          `- If ${brandName} is mentioned, identify the affiliation in first person. Never pose as an independent customer.`,
+          "- Do not add first-person brand affiliation or relationship wording unless the campaign instructions explicitly request it.",
           `- Put the broader topic first. ${brandName} must be a small aside inside an observation, frustration, uncertainty, or honest question, never the answer.`,
           "- Do not append a separate brand sentence. Do not turn the comment into a pitch.",
           "- If transcript is unavailable, use title + description + channel metadata and do not pretend to know details that are not present.",
@@ -2233,8 +2233,15 @@ function youtubeDraftProblem(input: {
     }
   }
   const affiliationProblem =
-    youtubeBrandAffiliationProblem(input.commentDraft, input.brandName) ||
-    youtubeBrandAffiliationProblem(input.replyDraft, input.brandName);
+    youtubeUnrequestedBrandAffiliationProblem(
+      input.campaignInstructions,
+      input.commentDraft,
+      input.brandName
+    ) || youtubeUnrequestedBrandAffiliationProblem(
+      input.campaignInstructions,
+      input.replyDraft,
+      input.brandName
+    );
   if (affiliationProblem) return affiliationProblem;
   const incidentalProblem =
     youtubeBrandIsIncidentalProblem(input.commentDraft, input.brandName) ||
@@ -2309,12 +2316,12 @@ async function enhanceInteractionPlanWithLlm(
         "Repair that exact problem while preserving every safe campaign instruction and the concrete video reference.",
         YOUTUBE_NATIVE_COMMENT_STYLE_RULES,
         `Mention ${brandName} exactly once, casually, inside the actual comment.`,
-        `If ${brandName} is mentioned, identify the affiliation in first person.`,
+        "Do not add first-person brand affiliation or relationship wording unless the campaign instructions explicitly request it.",
         `Start with the broader topic. Keep ${brandName} as a small aside and end with uncertainty or an honest question when natural.`,
         `${brandName} should be context, not conclusion.`,
         `Do not append a standalone ${brandName} sentence.`,
         isTapInCampaign
-          ? `If the campaign instructions explicitly request one or two factual ${brandName} capabilities, include every requested capability after disclosing the affiliation. Do not recommend it or claim results.`
+          ? `If the campaign instructions explicitly request one or two factual ${brandName} capabilities, include every requested capability using the perspective those instructions request. Do not recommend it or claim results.`
           : `Do not explain what ${brandName} does unless the video directly calls for it.`,
         `Do not use generic side notes like 'we see that at ${brandName}' or 'we see that a lot at ${brandName}'.`,
         "Do not use a reusable template. Return JSON only.",

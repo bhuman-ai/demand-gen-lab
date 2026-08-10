@@ -7,10 +7,10 @@ import {
   generateTapInThreadPreview,
 } from "../../src/lib/tapinsocial-preview";
 import {
-  youtubeBrandAffiliationProblem,
   youtubeBrandIsIncidentalProblem,
   youtubeCommentStyleProblem,
   youtubeExactBrandMentionProblem,
+  youtubeUnrequestedBrandAffiliationProblem,
 } from "../../src/lib/youtube-comment-style";
 
 test("TapIn preview prompt explicitly bans long dashes", () => {
@@ -26,6 +26,19 @@ test("TapIn preview prompt explicitly bans long dashes", () => {
   assert.match(prompt, /Never use em dashes or en dashes/i);
   assert.match(prompt, /standard maximum 32 words/i);
   assert.match(prompt, /viewer typing quickly/i);
+});
+
+test("TapIn preview prompt leaves affiliation wording to the user's UI prompt", () => {
+  const prompt = buildTapInPreviewPrompt({
+    brandName: "BeforeUsersDo",
+    openingPrompt: "Ask how people handle QA after shipping an app.",
+    replyPrompt: "Mention BeforeUsersDo and describe its testing options.",
+    videoTitle: "Shipping an app with Codex",
+    videoDescription: "A walkthrough of building and shipping an app.",
+  });
+
+  assert.doesNotMatch(prompt, /i work on \[brand\]|identify the affiliation|after disclosing/i);
+  assert.match(prompt, /Do not add first-person brand affiliation.*unless the reply prompt/i);
 });
 
 test("TapIn preview uses OpenRouter directly", async () => {
@@ -44,7 +57,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
             message: {
               content: JSON.stringify({
                 openingComment: "personalization without sounding robotic is the hard part",
-                reply: "outreach still feels awkward lol. i work on BHuman and we started with this exact headache",
+                reply: "outreach still feels awkward lol. BHuman fits the personalization part without taking over the conversation",
               }),
             },
           },
@@ -63,7 +76,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
       videoDescription: "How sales teams use personalized video without sounding robotic.",
     });
     assert.deepEqual(urls, ["https://openrouter.ai/api/v1/chat/completions"]);
-    assert.equal(preview.reply, "Outreach still feels awkward lol. I work on BHuman and we started with this exact headache");
+    assert.equal(preview.reply, "Outreach still feels awkward lol. BHuman fits the personalization part without taking over the conversation");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -76,7 +89,7 @@ test("TapIn preview uses OpenRouter directly", async () => {
 test("TapIn preview preserves a valid casual reply beyond the old 150-character cutoff", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
-  const reply = "Seo feels impossible lately. I work on ClusterSEO and tiktok links have been oddly decent, but everywhere else feels completely dead. Anyone seeing something different?";
+  const reply = "Seo feels impossible lately. ClusterSEO comes to mind because tiktok links have been oddly decent, but everywhere else feels completely dead. Anyone seeing something different?";
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
   globalThis.fetch = async () => new Response(
     JSON.stringify({
@@ -131,8 +144,8 @@ test("TapIn follows the requested QA question and factual BeforeUsersDo reply", 
     }
 
     const reply = requestCount === 1
-      ? "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Human testers can return recordings, fixes, and instructions for Codex or Claude."
-      : "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude.";
+      ? "Fresh eyes are usually what changes it. BeforeUsersDo connects you with human testers who return recordings, fixes, and instructions for Codex or Claude."
+      : "Fresh eyes are usually what changes it. BeforeUsersDo uses AI to test apps as customer personas, and connects you with human testers who return recordings, fixes, and instructions for Codex or Claude.";
     return new Response(
       JSON.stringify({
         choices: [{
@@ -160,8 +173,9 @@ test("TapIn follows the requested QA question and factual BeforeUsersDo reply", 
     assert.equal(requestCount, 2);
     assert.match(preview.openingComment, /bugs.*tutorial|tutorial.*bugs/i);
     assert.match(preview.reply, /Fresh eyes/i);
-    assert.match(preview.reply, /I work on BeforeUsersDo/i);
-    assert.match(preview.reply, /AI tests apps as customer personas/i);
+    assert.match(preview.reply, /BeforeUsersDo/i);
+    assert.doesNotMatch(preview.reply, /I work on/i);
+    assert.match(preview.reply, /uses AI to test apps as customer personas/i);
     assert.match(preview.reply, /human testers.*recordings.*fixes.*Codex or Claude/i);
     assert.doesNotMatch(`${preview.openingComment} ${preview.reply}`, /practical details around|real challenge is applying it consistently/i);
   } finally {
@@ -208,9 +222,9 @@ test("TapIn deterministically repairs repeated model omissions of requested capa
     assert.equal(requestCount, 3);
     assert.match(preview.openingComment, /Codex tutorial/i);
     assert.match(preview.reply, /Fresh eyes/i);
-    assert.match(preview.reply, /I work on BeforeUsersDo/i);
-    assert.match(preview.reply, /AI can test the app as customer personas/i);
-    assert.match(preview.reply, /human testers.*recordings.*fixes.*Codex or Claude/i);
+    assert.match(preview.reply, /BeforeUsersDo uses AI to test the app as customer personas/i);
+    assert.match(preview.reply, /connects you with human testers.*recordings.*fixes.*Codex or Claude/i);
+    assert.doesNotMatch(preview.reply, /I work on/i);
     assert.doesNotMatch(preview.reply, /same problem here|I had this problem/i);
     assert.match(warnings.join("\n"), /deterministic prompt-capability repair/i);
   } finally {
@@ -235,7 +249,7 @@ test("TapIn preview retries polished mini-essays", async () => {
         }
       : {
           openingComment: "copying the same seo checklist everywhere is so real lol",
-          reply: "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop",
+          reply: "seo feels random lately. ClusterSEO comes up in conversations about inconsistent results",
         };
     return new Response(
       JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
@@ -253,7 +267,7 @@ test("TapIn preview retries polished mini-essays", async () => {
     });
     assert.equal(requestCount, 2);
     assert.equal(preview.openingComment, "Copying the same seo checklist everywhere is so real lol");
-    assert.equal(preview.reply, "Seo feels random lately. I work on ClusterSEO and this problem comes up nonstop");
+    assert.equal(preview.reply, "Seo feels random lately. ClusterSEO comes up in conversations about inconsistent results");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -261,7 +275,7 @@ test("TapIn preview retries polished mini-essays", async () => {
   }
 });
 
-test("TapIn preview retries a misspelled or undisclosed brand reply", async () => {
+test("TapIn preview retries a misspelled brand reply without adding affiliation", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   let requestCount = 0;
@@ -275,7 +289,7 @@ test("TapIn preview retries a misspelled or undisclosed brand reply", async () =
         }
       : {
           openingComment: "copying the same seo checklist everywhere is wild",
-          reply: "seo feels random lately. i work on ClusterSEO and this problem comes up nonstop",
+          reply: "seo feels random lately. ClusterSEO comes up in conversations about inconsistent results",
         };
     return new Response(
       JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
@@ -292,7 +306,8 @@ test("TapIn preview retries a misspelled or undisclosed brand reply", async () =
       videoDescription: "Why the same checklist does not work on every site.",
     });
     assert.equal(requestCount, 2);
-    assert.equal(preview.reply, "Seo feels random lately. I work on ClusterSEO and this problem comes up nonstop");
+    assert.equal(preview.reply, "Seo feels random lately. ClusterSEO comes up in conversations about inconsistent results");
+    assert.doesNotMatch(preview.reply, /I work on/i);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -346,7 +361,15 @@ test("TapIn fallback grounds the thread in a concrete video claim", () => {
   assert.equal(youtubeCommentStyleProblem(preview.openingComment, "opening"), "");
   assert.equal(youtubeCommentStyleProblem(preview.reply, "reply"), "");
   assert.equal(youtubeExactBrandMentionProblem(preview.reply, "SafeAgain"), "");
-  assert.equal(youtubeBrandAffiliationProblem(preview.reply, "SafeAgain"), "");
+  assert.equal(
+    youtubeUnrequestedBrandAffiliationProblem(
+      "Mention SafeAgain as a personal aside.",
+      preview.reply,
+      "SafeAgain"
+    ),
+    ""
+  );
+  assert.doesNotMatch(preview.reply, /I work on/i);
   assert.equal(youtubeBrandIsIncidentalProblem(preview.reply, "SafeAgain"), "");
 });
 
@@ -453,7 +476,7 @@ test("TapIn keeps the last safe prompt-faithful draft when only soft grounding m
           message: {
             content: JSON.stringify({
               openingComment: "How do people catch the bugs they miss after shipping an app? Testing and QA still feel impossible.",
-              reply: "Fresh eyes matter. I work on BeforeUsersDo. AI tests as customer personas, and human testers return recordings and fixes for Claude.",
+              reply: "Getting fresh eyes really matters. BeforeUsersDo uses AI to test as customer personas, and connects you with human testers who return recordings and fixes for Claude.",
             }),
           },
         }],
@@ -474,7 +497,7 @@ test("TapIn keeps the last safe prompt-faithful draft when only soft grounding m
 
     assert.equal(requestCount, 3);
     assert.match(preview.openingComment, /testing and QA/i);
-    assert.match(preview.reply, /AI tests as customer personas/i);
+    assert.match(preview.reply, /uses AI to test (?:the app )?as customer personas/i);
     assert.match(preview.reply, /human testers.*recordings.*fixes.*Claude/i);
     assert.doesNotMatch(`${preview.openingComment} ${preview.reply}`, /part that stuck with me|number is hard to ignore/i);
     assert.match(warnings.join("\n"), /safe prompt-faithful draft after soft grounding retries/i);

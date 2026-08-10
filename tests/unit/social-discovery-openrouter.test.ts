@@ -87,7 +87,7 @@ test("thread prompt requires a real reply or rejects the whole opportunity", () 
   assert.doesNotMatch(prompt, /leave it empty if fake or unnecessary/i);
 });
 
-test("TapIn live prompt preserves campaign instructions that need factual capability context", () => {
+test("TapIn live prompt makes the user's campaign instructions the sole copy authority", () => {
   const tapInBrand = {
     ...brand(),
     name: "BeforeUsersDo",
@@ -96,6 +96,7 @@ test("TapIn live prompt preserves campaign instructions that need factual capabi
       "Ask how people deal with testing and QA after shipping apps with bugs they miss.",
       "Delayed reply instructions:",
       "Say fresh eyes matter. Mention BeforeUsersDo and explain that AI tests as customer personas while human testers return recordings and fixes.",
+      "Runtime context:",
       "TapIn supplies the matched YouTube video title and description to the generator automatically.",
     ].join("\n"),
   };
@@ -106,16 +107,19 @@ test("TapIn live prompt preserves campaign instructions that need factual capabi
     mode: "thread",
   });
 
-  assert.match(prompt, /TapIn fidelity rule/i);
-  assert.match(prompt, /preserve every safe requested intent/i);
-  assert.match(prompt, /include every requested capability/i);
-  assert.doesNotMatch(prompt, /after disclosing|identify the affiliation|small disclosed aside/i);
-  assert.match(prompt, /use up to 48 words/i);
+  assert.match(prompt, /campaign instructions.*sole authority/i);
+  assert.match(prompt, /Do not apply any additional copywriting rules/i);
   assert.match(prompt, /AI tests as customer personas/i);
   assert.match(prompt, /human testers return recordings and fixes/i);
+  assert.match(prompt, /Matched YouTube video title/i);
+  assert.doesNotMatch(prompt, /TapIn supplies the matched YouTube/i);
+  assert.doesNotMatch(
+    prompt,
+    /TapIn fidelity rule|viewer typing quickly|standard maximum|brand must|affiliation|em dashes|safe requested intent|marketing language|mention policy|under \d+ words|use up to \d+ words/i
+  );
 });
 
-test("TapIn live generation keeps a prompt-faithful factual reply beyond the default limit", async () => {
+test("TapIn live generation returns user-controlled copy without rewriting or validation", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   let requestCount = 0;
@@ -124,9 +128,10 @@ test("TapIn live generation keeps a prompt-faithful factual reply beyond the def
     name: "BeforeUsersDo",
     socialDiscoveryCommentPrompt: [
       "Opening comment instructions:",
-      "Ask how people deal with testing and QA after shipping apps with bugs they miss.",
+      "Write exactly: my app shipped — bugs everywhere; what now?",
       "Delayed reply instructions:",
-      "Say fresh eyes matter. Mention BeforeUsersDo and explain that AI tests as customer personas while human testers return recordings and fixes.",
+      "Write exactly: BeforeUsersDo first: I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
+      "Runtime context:",
       "TapIn supplies the matched YouTube video title and description to the generator automatically.",
     ].join("\n"),
   };
@@ -137,10 +142,8 @@ test("TapIn live generation keeps a prompt-faithful factual reply beyond the def
       headline: "QA after vibe coding",
       fitSummary: "The video is about building and shipping apps with AI.",
       shouldComment: true,
-      commentDraft: "How do people catch the bugs they miss after tutorials like this? Shipping an app and realizing QA missed things is brutal.",
-      replyDraft: requestCount === 1
-        ? "Fresh eyes are usually what changes it. I work on BeforeUsersDo. Our AI tests apps as customer personas, and human testers can return recordings, fixes, and instructions for Codex or Claude."
-        : "Fresh eyes are usually what changes it. BeforeUsersDo uses AI to test apps as customer personas, and connects you with human testers who return recordings, fixes, and instructions for Codex or Claude.",
+      commentDraft: "my app shipped — bugs everywhere; what now?",
+      replyDraft: "BeforeUsersDo first: I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
       assetNeeded: "",
       riskNotes: [],
       exitRules: [],
@@ -155,13 +158,16 @@ test("TapIn live generation keeps a prompt-faithful factual reply beyond the def
       mode: "thread",
     });
 
-    assert.equal(requestCount, 2);
+    assert.equal(requestCount, 1);
     assert.equal(drafted.interactionPlan.sequence.length, 2);
-    assert.match(drafted.interactionPlan.sequence[0]?.draft ?? "", /bugs.*tutorial|tutorial.*bugs/i);
-    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /Fresh eyes/i);
-    assert.doesNotMatch(drafted.interactionPlan.sequence[1]?.draft ?? "", /I work on/i);
-    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /uses AI to test apps as customer personas/i);
-    assert.match(drafted.interactionPlan.sequence[1]?.draft ?? "", /human testers.*recordings.*fixes.*Codex or Claude/i);
+    assert.equal(
+      drafted.interactionPlan.sequence[0]?.draft,
+      "my app shipped — bugs everywhere; what now?"
+    );
+    assert.equal(
+      drafted.interactionPlan.sequence[1]?.draft,
+      "BeforeUsersDo first: I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!"
+    );
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;

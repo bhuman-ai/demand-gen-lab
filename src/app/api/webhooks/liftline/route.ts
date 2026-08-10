@@ -1,14 +1,10 @@
 import { NextResponse } from "next/server";
 import { getBrandById, updateBrand } from "@/lib/factory-data";
 import { getTapInWorkspaceForUser, saveTapInYouTubeRoles } from "@/lib/tapinsocial-auth";
-import { campaignBrandName } from "@/lib/social-discovery-campaign-context";
 import { clearSocialDiscoveryPendingRepliesForBrand } from "@/lib/social-discovery-data";
-import { SOCIAL_COMMENT_PUNCTUATION_RULE } from "@/lib/social-comment-text";
 import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
   normalizeSocialDiscoveryYouTubePolicy,
-  youtubePolicyPromptLines,
-  type SocialDiscoveryYouTubePolicy,
 } from "@/lib/social-discovery-youtube-policy";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -42,43 +38,21 @@ function strings(value: unknown, limit = 12) {
 
 function contextualCommentPrompt(input: {
   campaignType: "comment" | "thread";
-  brandName: string;
-  positioning: string;
-  voice: string;
-  voiceSample: string;
   openingCommentPrompt: string;
   delayedReplyPrompt: string;
-  maximumSharePercent: number;
-  youtubePolicy: SocialDiscoveryYouTubePolicy;
 }) {
   return [
-    "Write a short, platform-native comment flow that is genuinely useful to the exact conversation.",
-    "The opening comment must work on its own even if no reply is posted.",
-    "Brand name: " + input.brandName,
-    "Brand positioning: " + input.positioning,
-    "Voice preset: " + input.voice,
-    "Voice example: " + input.voiceSample,
+    "TapIn campaign instructions:",
     "Opening comment instructions:",
     input.openingCommentPrompt,
     input.campaignType === "thread"
       ? "Delayed reply instructions:"
-      : "Campaign type: Comment only. Do not generate or schedule a reply.",
+      : "Campaign type: Comment only.",
     input.campaignType === "thread" ? input.delayedReplyPrompt : "",
     "Runtime context:",
-    `- ${SOCIAL_COMMENT_PUNCTUATION_RULE}`,
     "- TapIn supplies the matched YouTube video title and description to the generator automatically.",
     "- Opening comment instructions apply only to commentDraft.",
     "- Delayed reply instructions apply only to replyDraft.",
-    "Contextual mention policy:",
-    "- Mention the exact brand only when heuristic_mention_policy is possible_soft_mention and the brand directly helps the answer.",
-    "- Keep brand mentions at or below " + input.maximumSharePercent + "% of qualified comments across the campaign.",
-    "- If the mention would feel forced, promotional, repetitive, or unsupported, write a useful no-mention comment or return shouldComment=false.",
-    "- Never add a link unless the person explicitly asks for one.",
-    "- Never call the comment a backlink or promise search-ranking impact.",
-    "- Never fake personal experience, customer status, or product results.",
-    "- Disclose affiliation whenever the wording could otherwise imply an independent recommendation.",
-    "- When the brand appears, mention it exactly once and keep it incidental.",
-    ...youtubePolicyPromptLines(input.youtubePolicy),
   ].join("\n");
 }
 
@@ -93,11 +67,9 @@ export async function POST(request: Request) {
   const autopilot = asRecord(body.autopilot);
   const backend = asRecord(body.backend);
   const tenant = asRecord(setup.tenant);
-  const commentVoice = asRecord(autopilot.commentVoice);
   const prompts = asRecord(autopilot.prompts);
   const youtubeRoles = asRecord(autopilot.youtubeRoles);
   const youtubeDiscovery = asRecord(autopilot.youtubeDiscovery ?? setup.youtubeDiscoveryPolicy);
-  const brandMention = asRecord(autopilot.brandMention);
   const account = asRecord(setup.account);
   const connections = asRecord(account.connections);
   const brandId = String(backend.brandId ?? "").trim();
@@ -127,18 +99,6 @@ export async function POST(request: Request) {
   const targets = strings(autopilot.targets ?? setup.targets);
   const platforms = strings(autopilot.platforms ?? setup.platforms).filter(
     (platform) => platform === "instagram" || platform === "youtube"
-  );
-  const activeCampaignName = campaignBrandName(String(setup.campaignName ?? ""));
-  const requestedBrandName =
-    activeCampaignName ||
-    String(brandMention.exactBrandName ?? tenant.brandName ?? "").trim() ||
-    brand.name;
-  const positioning = activeCampaignName
-    ? targets.join(", ") || activeCampaignName
-    : String(brandMention.positioning ?? setup.brandSummary ?? "").trim();
-  const maximumSharePercent = Math.min(
-    50,
-    Math.max(10, Number(brandMention.maximumSharePercent) || 35)
   );
   const active = setup.status !== "paused";
   const youtubeConnected = connections.youtube === true;
@@ -177,20 +137,12 @@ export async function POST(request: Request) {
   const updated = await updateBrand(brandId, {
     socialDiscoveryCommentPrompt: contextualCommentPrompt({
       campaignType,
-      brandName: requestedBrandName,
-      positioning,
-      voice: String(commentVoice.preset ?? setup.voice ?? "Warm").trim(),
-      voiceSample: String(commentVoice.sample ?? setup.voiceSample ?? "").trim(),
       openingCommentPrompt: String(
-        prompts.openingComment ?? setup.commentPrompt ??
-          "Write a short, natural comment that reacts to one specific point in the video."
+        prompts.openingComment ?? setup.commentPrompt ?? ""
       ).trim(),
       delayedReplyPrompt: String(
-        prompts.delayedReply ?? setup.replyPrompt ??
-          "Reply directly to the opening comment with a concise, helpful answer."
+        prompts.delayedReply ?? setup.replyPrompt ?? ""
       ).trim(),
-      maximumSharePercent,
-      youtubePolicy,
     }),
     socialDiscoveryPlatforms: platforms.length ? platforms : ["youtube"],
     socialDiscoveryQueries: targets,
@@ -227,8 +179,8 @@ export async function POST(request: Request) {
         time: "Ready",
       },
       {
-        label: "Contextual mention policy",
-        detail: "Useful first / mention at most " + maximumSharePercent + "% / skip when unnatural",
+        label: "Prompt control",
+        detail: "Opening and reply copy follows the prompts you wrote",
         time: "Ready",
       },
       {

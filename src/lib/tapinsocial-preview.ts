@@ -137,7 +137,7 @@ export function buildTapInPreviewFallback(
   const evidence = fallbackEvidencePhrase(input.videoDescription);
   const openingComment = normalizeYouTubeCommentCapitalization(
     evidence
-      ? `“${evidence}” is the part that stuck with me.`
+      ? `“${evidence}” is hard to ignore.`
       : "There is more going on here than the title makes obvious."
   );
   if (input.campaignType === "comment") {
@@ -147,8 +147,8 @@ export function buildTapInPreviewFallback(
   const brandName = sanitizeSocialCommentText(compact(input.brandName, 80));
   const reply = normalizeYouTubeCommentCapitalization(
     /\d|%/.test(evidence)
-      ? `That number is hard to ignore. I work on ${brandName}, so maybe I notice this gap more than most.`
-      : `That detail is easy to miss. I work on ${brandName}, so maybe I notice it more than most.`
+      ? `That gap is brutal. I work on ${brandName}, and I wish more people talked about what actually changes it.`
+      : `That detail is easy to miss. I work on ${brandName}, and I wish more people talked about it plainly.`
   );
   return { openingComment, reply };
 }

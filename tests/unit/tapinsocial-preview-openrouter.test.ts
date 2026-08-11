@@ -13,7 +13,7 @@ function openRouterResponse(value: Record<string, unknown>) {
   );
 }
 
-test("TapIn preview prompt reserves one separately supplied system punctuation rule", () => {
+test("TapIn preview prompt reserves separately supplied YouTube-native system rules", () => {
   const prompt = buildTapInPreviewPrompt({
     brandName: "BeforeUsersDo",
     openingPrompt: "Use my exact opening voice.",
@@ -22,7 +22,8 @@ test("TapIn preview prompt reserves one separately supplied system punctuation r
     videoDescription: "A walkthrough of building and shipping an app.",
   });
 
-  assert.match(prompt, /user's prompts.*sole authority.*system punctuation rule supplied separately/i);
+  assert.match(prompt, /user's prompts.*control the topic, perspective, brand mentions, and required details/i);
+  assert.match(prompt, /YouTube-native length, capitalization, and punctuation rules supplied separately/i);
   assert.doesNotMatch(prompt, /Never use em dashes/i);
   assert.match(prompt, /Opening prompt:\nUse my exact opening voice/i);
   assert.match(prompt, /Reply prompt:\nUse my exact reply voice/i);
@@ -45,10 +46,10 @@ test("TapIn preview removes em dashes and normalizes natural capitalization", as
     const request = JSON.parse(String(init?.body ?? "{}")) as {
       messages?: Array<{ role?: string; content?: string }>;
     };
-    assert.deepEqual(request.messages?.[0], {
-      role: "system",
-      content: "Never use em dashes. Use commas, periods, or parentheses instead.",
-    });
+    assert.equal(request.messages?.[0]?.role, "system");
+    assert.match(request.messages?.[0]?.content ?? "", /Never use em dashes/i);
+    assert.match(request.messages?.[0]?.content ?? "", /YouTube-native voice rules/i);
+    assert.match(request.messages?.[0]?.content ?? "", /standard maximum 32 words/i);
     return openRouterResponse({ openingComment, reply });
   };
 

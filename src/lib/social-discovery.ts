@@ -11,7 +11,7 @@ import {
 import { resolveSocialDiscoveryCommentPrompt } from "@/lib/social-discovery-comment-prompt";
 import {
   applyTapInSystemCopyRule,
-  TAPIN_SYSTEM_COPY_RULE,
+  TAPIN_GENERATION_SYSTEM_PROMPT,
 } from "@/lib/tapinsocial-copy";
 import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
 import {
@@ -2334,7 +2334,7 @@ async function enhanceInteractionPlanWithLlm(
     let promptUsed = prompt;
     let row = await requestSocialCommentPlan({
       prompt: promptUsed,
-      systemPrompt: isTapInCampaign ? TAPIN_SYSTEM_COPY_RULE : undefined,
+      systemPrompt: isTapInCampaign ? TAPIN_GENERATION_SYSTEM_PROMPT : undefined,
     });
 
     let initialCommentDraft = isTapInCampaign
@@ -2390,7 +2390,7 @@ async function enhanceInteractionPlanWithLlm(
           ].join("\n");
       row = await requestSocialCommentPlan({
         prompt: promptUsed,
-        systemPrompt: isTapInCampaign ? TAPIN_SYSTEM_COPY_RULE : undefined,
+        systemPrompt: isTapInCampaign ? TAPIN_GENERATION_SYSTEM_PROMPT : undefined,
       });
       initialCommentDraft = isTapInCampaign
         ? tapInDraft(row.commentDraft)

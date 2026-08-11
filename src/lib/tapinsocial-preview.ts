@@ -1,7 +1,7 @@
 import { generateJsonWithLlm } from "@/lib/llm-json";
 import {
   applyTapInSystemCopyRule,
-  TAPIN_SYSTEM_COPY_RULE,
+  TAPIN_GENERATION_SYSTEM_PROMPT,
 } from "@/lib/tapinsocial-copy";
 import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
 import {
@@ -84,8 +84,8 @@ export function buildTapInPreviewPrompt(input: TapInThreadPreviewInput) {
     commentOnly
       ? "Return JSON only with exactly one string key: openingComment."
       : "Return JSON only with exactly two string keys: openingComment and reply.",
-    "The user's prompts below are the sole authority for wording, style, perspective, brand mentions, and content except for the single system punctuation rule supplied separately.",
-    "Do not apply any additional copywriting rules.",
+    "The user's prompts below control the topic, perspective, brand mentions, and required details.",
+    "Apply the YouTube-native length, capitalization, and punctuation rules supplied separately.",
     "",
     "Opening prompt:",
     text(input.openingPrompt),
@@ -114,7 +114,7 @@ export async function generateTapInThreadPreview(
     try {
       const result = await generateJsonWithLlm({
         task: "social_comment_planning",
-        systemPrompt: TAPIN_SYSTEM_COPY_RULE,
+        systemPrompt: TAPIN_GENERATION_SYSTEM_PROMPT,
         prompt: attempt === 0
           ? basePrompt
           : structuralRepairPrompt({ basePrompt, commentOnly, previous, problem: lastProblem }),

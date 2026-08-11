@@ -33,7 +33,7 @@ test("TapIn preview prompt reserves one separately supplied system punctuation r
   );
 });
 
-test("TapIn preview removes em dashes but preserves every other user-controlled copy choice", async () => {
+test("TapIn preview removes em dashes and normalizes natural capitalization", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   const openingComment = "my app shipped — bugs everywhere; what now?";
@@ -63,7 +63,7 @@ test("TapIn preview removes em dashes but preserves every other user-controlled 
 
     assert.equal(requestCount, 1);
     assert.deepEqual(preview, {
-      openingComment: "my app shipped, bugs everywhere; what now?",
+      openingComment: "My app shipped, bugs everywhere; what now?",
       reply,
     });
   } finally {
@@ -105,7 +105,7 @@ test("TapIn retries only an incomplete output and adds no copy rules during repa
       videoDescription: "Description",
     });
     assert.equal(requestCount, 2);
-    assert.equal(preview.reply, "reply exactly as requested");
+    assert.equal(preview.reply, "Reply exactly as requested");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
@@ -128,7 +128,7 @@ test("TapIn comment-only preview maps only the opening prompt", async () => {
       videoTitle: "Video",
       videoDescription: "Description",
     });
-    assert.deepEqual(preview, { openingComment: "exact solo comment", reply: "" });
+    assert.deepEqual(preview, { openingComment: "Exact solo comment", reply: "" });
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;

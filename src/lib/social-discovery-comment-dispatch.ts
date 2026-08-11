@@ -30,6 +30,7 @@ import {
 } from "@/lib/social-discovery-youtube-policy";
 import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
 import { selectBalancedAccountPair } from "@/lib/social-discovery-account-rotation";
+import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
 
 type AutoCommentDispatchOptions = {
   enabled?: boolean;
@@ -225,7 +226,12 @@ function draftPair(post: SocialDiscoveryPost) {
   };
 }
 
-function draftProblem(post: SocialDiscoveryPost, brandName: string, needsReply: boolean) {
+function draftProblem(
+  post: SocialDiscoveryPost,
+  brandName: string,
+  needsReply: boolean,
+  campaignInstructions: string
+) {
   const pair = draftPair(post);
   if (!pair.comment) return "missing_comment";
   if (needsReply && !pair.reply) return "missing_reply";
@@ -234,6 +240,13 @@ function draftProblem(post: SocialDiscoveryPost, brandName: string, needsReply: 
   if (mentions === 0) return "missing_brand";
   if (mentions > 1) return "brand_mentioned_more_than_once";
   if (brandMentionLooksCannedOrAdLike(combined, brandName)) return "canned_brand_mention";
+  const fidelityProblem = tapInCopyFidelityProblem({
+    campaignInstructions,
+    brandName,
+    commentDraft: pair.comment,
+    replyDraft: pair.reply,
+  });
+  if (fidelityProblem) return "campaign_copy_fidelity";
   return "";
 }
 
@@ -623,7 +636,12 @@ export async function runSocialDiscoveryAutoCommentDispatchTick(
           continue;
         }
         const brandName = commentBrandName(campaignBrand.name);
-        const problem = draftProblem(postToSend, brandName, Boolean(reply));
+        const problem = draftProblem(
+          postToSend,
+          brandName,
+          Boolean(reply),
+          campaignBrand.socialDiscoveryCommentPrompt
+        );
         if (problem) {
           await markDispatchAttempt({
             post: postToSend,

@@ -3,6 +3,7 @@ import {
   applyTapInSystemCopyRule,
   TAPIN_SYSTEM_COPY_RULE,
 } from "@/lib/tapinsocial-copy";
+import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
 
 export type TapInThreadPreviewInput = {
   campaignType?: "comment" | "thread";
@@ -22,10 +23,21 @@ function text(value: unknown) {
   return String(value ?? "").trim();
 }
 
-function structuralProblem(commentOnly: boolean, preview: TapInThreadPreview) {
+function structuralProblem(input: {
+  commentOnly: boolean;
+  preview: TapInThreadPreview;
+  campaignInstructions: string;
+  brandName: string;
+}) {
+  const { commentOnly, preview } = input;
   if (!preview.openingComment) return "openingComment is empty";
   if (!commentOnly && !preview.reply) return "reply is empty";
-  return "";
+  return tapInCopyFidelityProblem({
+    campaignInstructions: input.campaignInstructions,
+    brandName: input.brandName,
+    commentDraft: preview.openingComment,
+    replyDraft: preview.reply,
+  });
 }
 
 function structuralRepairPrompt(input: {
@@ -118,7 +130,12 @@ export async function generateTapInThreadPreview(
         openingComment: applyTapInSystemCopyRule(parsed.openingComment),
         reply: commentOnly ? "" : applyTapInSystemCopyRule(parsed.reply),
       };
-      lastProblem = structuralProblem(commentOnly, previous);
+      lastProblem = structuralProblem({
+        commentOnly,
+        preview: previous,
+        campaignInstructions: [input.openingPrompt, input.replyPrompt].filter(Boolean).join("\n"),
+        brandName: input.brandName,
+      });
       if (!lastProblem) return previous;
     } catch (error) {
       lastError = error;

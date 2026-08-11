@@ -107,9 +107,9 @@ test("TapIn live prompt reserves one separately supplied system punctuation rule
     mode: "thread",
   });
 
-  assert.match(prompt, /campaign instructions.*sole authority.*system punctuation rule supplied separately/i);
+  assert.match(prompt, /campaign instructions.*control the topic, perspective, brand mentions, and required details/i);
+  assert.match(prompt, /YouTube-native length, capitalization, and punctuation rules supplied separately/i);
   assert.doesNotMatch(prompt, /Never use em dashes/i);
-  assert.match(prompt, /Do not apply any additional copywriting rules/i);
   assert.match(prompt, /AI tests as customer personas/i);
   assert.match(prompt, /human testers return recordings and fixes/i);
   assert.match(prompt, /Matched YouTube video title/i);

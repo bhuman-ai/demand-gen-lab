@@ -17,7 +17,7 @@ export const YOUTUBE_NATIVE_COMMENT_STYLE_RULES = [
   "- Stay on one conversational thread. A quick topic reaction, one personal aside, and a genuine question can coexist.",
   "- Use natural capitalization. Capitalize the opening word, standalone 'I', and the first word after a sentence-ending period, question mark, or exclamation point.",
   "- Contractions, light slang, and an occasional emoji are okay when they fit. Never force all-lowercase text, typos, slang, or emoji.",
-  "- Do not use semicolons, headings, bullets, marketing language, or polished bridge phrases.",
+  "- Do not use colons, semicolons, headings, bullets, marketing language, or polished bridge phrases.",
   "- Avoid AI-sounding openings such as 'Really appreciated the point', 'This is spot on', 'What really stood out', and 'It makes sense that'.",
   "- Avoid salesy phrases such as 'tools like', 'game changer', 'valuable insights', 'great breakdown', and 'if you are serious about'.",
   "- If a brand is required, make it a minor aside rather than the point. Start with the broader topic and use only the perspective requested by the campaign instructions.",

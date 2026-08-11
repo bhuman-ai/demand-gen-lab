@@ -13,6 +13,7 @@ import {
   applyTapInSystemCopyRule,
   TAPIN_SYSTEM_COPY_RULE,
 } from "@/lib/tapinsocial-copy";
+import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
 import {
   sanitizeSocialCommentText,
   SOCIAL_COMMENT_PUNCTUATION_RULE,
@@ -2242,7 +2243,12 @@ function youtubeDraftProblem(input: {
     if (input.draftMode === "thread" && !input.replyDraft.trim()) {
       return "missing replyDraft for thread mode";
     }
-    return "";
+    return tapInCopyFidelityProblem({
+      campaignInstructions: input.campaignInstructions,
+      brandName: input.brandName,
+      commentDraft: input.commentDraft,
+      replyDraft: input.replyDraft,
+    });
   }
   if (input.draftMode === "thread" && !input.replyDraft.trim()) {
     return "missing replyDraft for thread mode";

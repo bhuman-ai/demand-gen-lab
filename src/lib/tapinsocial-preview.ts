@@ -65,6 +65,8 @@ function structuralRepairPrompt(input: {
     "",
     `The previous response was structurally invalid because ${input.problem}.`,
     `Previous response: ${JSON.stringify(input.previous)}`,
+    "Rewrite the complete response so it passes that exact failed check.",
+    "If the problem reports too many words or characters, remove optional detail instead of repeating the same draft.",
     input.commentOnly
       ? "Return the complete JSON object with a non-empty openingComment string."
       : "Return the complete JSON object with non-empty openingComment and reply strings.",

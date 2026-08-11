@@ -2103,8 +2103,8 @@ export function buildSocialCommentPlanningPrompt(input: {
       draftMode === "thread"
         ? "Return non-empty commentDraft and replyDraft strings."
         : "Return a non-empty commentDraft string and an empty replyDraft string.",
-      "The user's campaign instructions below are the sole authority for wording, style, perspective, brand mentions, and content except for the single system punctuation rule supplied separately.",
-      "Do not apply any additional copywriting rules.",
+      "The user's campaign instructions below control the topic, perspective, brand mentions, and required details.",
+      "Apply the YouTube-native length, capitalization, and punctuation rules supplied separately.",
       "Set shouldComment to true for this matched video.",
       "Return JSON only with keys: headline, fitSummary, shouldComment, commentDraft, replyDraft, assetNeeded, riskNotes, exitRules.",
       "",

@@ -188,6 +188,7 @@ function isUsableTapInYouTubeAccount(account: Awaited<ReturnType<typeof getOutre
 
 export async function saveTapInYouTubeRoles(input: {
   workspace: TapInAuthWorkspace;
+  assignmentBrandId?: string;
   campaignType?: "comment" | "thread";
   accountIds?: string[];
   openingAccountIds?: string[];
@@ -195,6 +196,8 @@ export async function saveTapInYouTubeRoles(input: {
   openingAccountId?: string;
   replyAccountId?: string;
 }) {
+  const assignmentBrandId = String(input.assignmentBrandId ?? input.workspace.brandId).trim();
+  if (!assignmentBrandId) throw new Error("TapIn campaign identity is missing.");
   const campaignType = input.campaignType === "comment" ? "comment" : "thread";
   const uniqueIds = (values: Array<string | undefined>) =>
     Array.from(new Set(values.map((value) => String(value ?? "").trim()).filter(Boolean)));
@@ -244,13 +247,13 @@ export async function saveTapInYouTubeRoles(input: {
   const updatedAt = new Date().toISOString();
   const updates = accounts.filter(Boolean).map(async (account) => {
     const existing = account!.config.social.tapInAssignments.filter(
-      (assignment) => assignment.brandId !== input.workspace.brandId
+      (assignment) => assignment.brandId !== assignmentBrandId
     );
     const canOpen = openingAccountIds.includes(account!.id);
     const canReply = replyAccountIds.includes(account!.id);
     const role = canOpen && canReply ? "both" : canOpen ? "opening" : canReply ? "reply" : "";
     const tapInAssignments = role
-      ? [...existing, { brandId: input.workspace.brandId, role, updatedAt }]
+      ? [...existing, { brandId: assignmentBrandId, role, updatedAt }]
       : existing;
     const updated = await updateOutreachAccount(account!.id, {
       config: { social: { tapInAssignments } },

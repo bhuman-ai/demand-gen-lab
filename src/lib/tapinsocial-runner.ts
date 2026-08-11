@@ -1,9 +1,11 @@
 import { recordInternalCronRun, runCronTask } from "@/lib/internal-cron";
+import { listBrands } from "@/lib/factory-data";
 import { listSocialRoutingAccounts } from "@/lib/outreach-data";
 import { runSocialDiscoveryAutoCommentDispatchTick } from "@/lib/social-discovery-comment-dispatch";
 import { runSocialDiscoveryDelayedReplyTick } from "@/lib/social-discovery-comment-delivery";
 import { splitSocialDiscoveryCsv } from "@/lib/social-discovery-search-strategy";
 import { runSocialDiscoveryYouTubeRefillTick } from "@/lib/social-discovery-youtube-refill";
+import { resolveActiveTapInRunnerBrandIds } from "@/lib/tapinsocial-campaign-runtime";
 
 function envFlag(name: string, fallback = false) {
   const value = String(process.env[name] ?? "").trim().toLowerCase();
@@ -26,6 +28,14 @@ export function tapInRunnerConfig() {
     brandIds,
     configured: brandIds.length > 0,
   };
+}
+
+async function activeTapInRunnerBrandIds() {
+  const config = tapInRunnerConfig();
+  return resolveActiveTapInRunnerBrandIds({
+    configuredBrandIds: config.brandIds,
+    brands: await listBrands(),
+  });
 }
 
 export function isTapInCronAuthorized(request: Request) {
@@ -71,7 +81,8 @@ export async function resolveTapInAccountRoles(brandId: string) {
 
 export async function getTapInRunnerBrandState(brandId: string) {
   const config = tapInRunnerConfig();
-  const allowed = config.brandIds.includes(brandId);
+  const brandIds = await activeTapInRunnerBrandIds();
+  const allowed = brandIds.includes(brandId);
   const roles = allowed ? await resolveTapInAccountRoles(brandId) : {
     ready: false,
     campaignType: "thread" as const,
@@ -81,22 +92,23 @@ export async function getTapInRunnerBrandState(brandId: string) {
   return {
     enabled: config.enabled,
     dryRun: config.dryRun,
-    configured: config.configured,
+    configured: brandIds.length > 0,
     allowed,
     rolesReady: roles.ready,
-    live: config.enabled && !config.dryRun && config.configured && allowed && roles.ready,
+    live: config.enabled && !config.dryRun && brandIds.length > 0 && allowed && roles.ready,
   };
 }
 
 export async function runTapInYouTubeRefill() {
   const config = tapInRunnerConfig();
-  if (!config.enabled || !config.configured) {
+  const brandIds = await activeTapInRunnerBrandIds();
+  if (!config.enabled || !brandIds.length) {
     return { ok: true, skipped: true, reason: !config.enabled ? "runner_disabled" : "brand_allowlist_missing" };
   }
   return runSocialDiscoveryYouTubeRefillTick({
-    brandIds: config.brandIds,
+    brandIds,
     scanAllBrands: false,
-    brandLimit: config.brandIds.length,
+    brandLimit: brandIds.length,
     maxQueries: envNumber("TAPIN_SOCIAL_REFILL_MAX_QUERIES", 4, 1, 8),
     limitPerQuery: envNumber("TAPIN_SOCIAL_REFILL_LIMIT_PER_QUERY", 5, 1, 25),
   });
@@ -104,8 +116,9 @@ export async function runTapInYouTubeRefill() {
 
 export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
   const config = tapInRunnerConfig();
+  const brandIds = await activeTapInRunnerBrandIds();
   const dryRun = config.dryRun || input.forceDryRun === true;
-  if (!config.enabled || !config.configured) {
+  if (!config.enabled || !brandIds.length) {
     return {
       ok: true,
       skipped: true,
@@ -117,7 +130,7 @@ export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
   }
 
   const brands = [];
-  for (const brandId of config.brandIds) {
+  for (const brandId of brandIds) {
     const roles = await resolveTapInAccountRoles(brandId);
     if (!roles.ready) {
       brands.push({ brandId, skipped: true, reason: "account_roles_missing" });
@@ -140,7 +153,7 @@ export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
     brands.push({ brandId, skipped: false, dispatch });
   }
   const delayedReplies = await runSocialDiscoveryDelayedReplyTick({
-    brandIds: config.brandIds,
+    brandIds,
     limit: 25,
     dryRun,
   });

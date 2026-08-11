@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
-import { getBrandById, updateBrand } from "@/lib/factory-data";
+import { createBrand, getBrandById, listBrands, updateBrand } from "@/lib/factory-data";
 import { getTapInWorkspaceForUser, saveTapInYouTubeRoles } from "@/lib/tapinsocial-auth";
 import { clearSocialDiscoveryPendingRepliesForBrand } from "@/lib/social-discovery-data";
+import { runSocialDiscoveryYouTubeRefillTick } from "@/lib/social-discovery-youtube-refill";
+import {
+  findTapInCampaignRuntimeBrand,
+  tapInCampaignRuntimeNotes,
+} from "@/lib/tapinsocial-campaign-runtime";
 import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
   normalizeSocialDiscoveryYouTubePolicy,
@@ -68,6 +73,8 @@ export async function POST(request: Request) {
   const backend = asRecord(body.backend);
   const tenant = asRecord(setup.tenant);
   const prompts = asRecord(autopilot.prompts);
+  const commentVoice = asRecord(autopilot.commentVoice);
+  const brandMention = asRecord(autopilot.brandMention);
   const youtubeRoles = asRecord(autopilot.youtubeRoles);
   const youtubeDiscovery = asRecord(autopilot.youtubeDiscovery ?? setup.youtubeDiscoveryPolicy);
   const account = asRecord(setup.account);
@@ -76,7 +83,7 @@ export async function POST(request: Request) {
   const setupId = String(setup.setupId ?? "").trim();
   const authUserId = String(tenant.userId ?? "").trim();
 
-  if (!brandId || !authUserId) {
+  if (!brandId || !authUserId || !setupId) {
     return NextResponse.json(
       { ok: false, message: "Authenticated TapIn workspace is required." },
       { status: 400 }
@@ -107,15 +114,37 @@ export async function POST(request: Request) {
     DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY
   ) ?? DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY;
   const campaignType = youtubeRoles.campaignType === "comment" ? "comment" : "thread";
+  const requestedBrandName = String(brandMention.exactBrandName ?? setup.campaignName ?? brand.name).trim() || brand.name;
+  const positioning = String(brandMention.positioning ?? setup.brandSummary ?? targets.join(", ")).trim();
+  const runtimeNotes = tapInCampaignRuntimeNotes({ workspaceBrandId: brandId, campaignId: setupId });
+  let campaignBrand = findTapInCampaignRuntimeBrand(await listBrands(), {
+    workspaceBrandId: brandId,
+    campaignId: setupId,
+  });
+  if (!campaignBrand) {
+    campaignBrand = await createBrand({
+      name: requestedBrandName,
+      website: "",
+      tone: String(commentVoice.preset ?? setup.voice ?? "Warm").trim(),
+      notes: runtimeNotes,
+      product: positioning,
+      socialDiscoveryPlatforms: platforms.length ? platforms : ["youtube"],
+      socialDiscoveryQueries: targets,
+      socialDiscoveryYouTubeAutoCommentEnabled: false,
+      socialDiscoveryYouTubePolicy: youtubePolicy,
+      targetMarkets: targets,
+    });
+  }
   // Pending replies belong to the campaign configuration that created them.
   // Clear them on every activation so a newly selected brand can never inherit
   // a scheduled reply from the previous campaign.
-  const cancelledReplyCount = await clearSocialDiscoveryPendingRepliesForBrand(brandId);
+  const cancelledReplyCount = await clearSocialDiscoveryPendingRepliesForBrand(campaignBrand.id);
 
   if (active && youtubeConnected && platforms.includes("youtube")) {
     try {
       await saveTapInYouTubeRoles({
         workspace,
+        assignmentBrandId: campaignBrand.id,
         campaignType,
         accountIds: strings(youtubeRoles.accountIds, 50),
         openingAccountIds: strings(youtubeRoles.openingAccountIds, 50),
@@ -134,7 +163,12 @@ export async function POST(request: Request) {
     }
   }
 
-  const updated = await updateBrand(brandId, {
+  const updated = await updateBrand(campaignBrand.id, {
+    name: requestedBrandName,
+    website: "",
+    tone: String(commentVoice.preset ?? setup.voice ?? "Warm").trim(),
+    notes: runtimeNotes,
+    product: positioning,
     socialDiscoveryCommentPrompt: contextualCommentPrompt({
       campaignType,
       openingCommentPrompt: String(
@@ -150,11 +184,23 @@ export async function POST(request: Request) {
     socialDiscoveryYouTubePolicy: youtubePolicy,
     socialDiscoveryYouTubeAutoCommentEnabled:
       active && youtubeConnected && platforms.includes("youtube"),
+    targetMarkets: targets,
   });
 
   if (!updated) {
     return NextResponse.json({ ok: false, message: "Campaign could not be saved." }, { status: 500 });
   }
+
+  const firstScan = active && youtubeConnected && platforms.includes("youtube")
+    ? await runSocialDiscoveryYouTubeRefillTick({
+        brandIds: [updated.id],
+        scanAllBrands: false,
+        brandLimit: 1,
+        maxQueries: 4,
+        limitPerQuery: 5,
+      }).catch(() => null)
+    : null;
+  const firstScanResult = firstScan?.results?.[0];
 
   return NextResponse.json({
     ok: true,
@@ -168,7 +214,9 @@ export async function POST(request: Request) {
     proof: [
       {
         label: "Watching relevant conversations",
-        detail: targets.slice(0, 3).join(", ") || "Campaign targets saved",
+        detail: firstScanResult
+          ? `${firstScanResult.found} found / ${firstScanResult.saved} ready from the first scan`
+          : targets.slice(0, 3).join(", ") || "Campaign targets saved",
         time: "Now",
       },
       {

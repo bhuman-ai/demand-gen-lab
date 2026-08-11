@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getBrandById } from "@/lib/factory-data";
+import { getBrandById, listBrands } from "@/lib/factory-data";
 import {
   listSocialDiscoveryCommentedPostsSince,
   listSocialDiscoveryPostsWithPendingReplies,
@@ -7,6 +7,7 @@ import {
 import { buildTapInActivitySnapshot } from "@/lib/tapinsocial-activity";
 import { getTapInWorkspaceForUser } from "@/lib/tapinsocial-auth";
 import { getTapInRunnerBrandState } from "@/lib/tapinsocial-runner";
+import { findTapInCampaignRuntimeBrand } from "@/lib/tapinsocial-campaign-runtime";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
   const body = asRecord(await request.json().catch(() => ({})));
   const userId = requiredText(body.userId, 120);
   const brandId = requiredText(body.brandId, 120);
+  const campaignId = requiredText(body.campaignId, 160);
   if (!userId || !brandId) {
     return NextResponse.json({ error: "TapIn workspace is required." }, { status: 400 });
   }
@@ -58,9 +60,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const brand = await getBrandById(brandId);
+  const campaignBrand = campaignId
+    ? findTapInCampaignRuntimeBrand(await listBrands(), {
+        workspaceBrandId: brandId,
+        campaignId,
+      })
+    : null;
+  const activityBrandId = campaignBrand?.id ?? (campaignId ? "" : brandId);
+  const brand = activityBrandId ? await getBrandById(activityBrandId) : null;
   if (!brand) {
-    return NextResponse.json({ error: "TapIn brand was not found." }, { status: 404 });
+    return NextResponse.json({ error: "This campaign has not been started on the live runner yet." }, { status: 404 });
   }
 
   const now = new Date();
@@ -72,13 +81,13 @@ export async function POST(request: Request) {
   try {
     const [commentedPosts, pendingReplyPosts, runner] = await Promise.all([
       listSocialDiscoveryCommentedPostsSince({
-        brandId,
+        brandId: activityBrandId,
         platform: "youtube",
         since,
         limit: 1000,
       }),
-      listSocialDiscoveryPostsWithPendingReplies({ brandIds: [brandId], limit: 500 }),
-      getTapInRunnerBrandState(brandId),
+      listSocialDiscoveryPostsWithPendingReplies({ brandIds: [activityBrandId], limit: 500 }),
+      getTapInRunnerBrandState(activityBrandId),
     ]);
     const activity = buildTapInActivitySnapshot({
       enabled: brand.socialDiscoveryYouTubeAutoCommentEnabled && runner.live,
@@ -87,7 +96,7 @@ export async function POST(request: Request) {
       campaignStartedAt,
       now,
     });
-    return NextResponse.json({ ok: true, activity, runner });
+    return NextResponse.json({ ok: true, activity, runner, backendBrandId: activityBrandId });
   } catch {
     return NextResponse.json(
       { error: "TapIn activity is unavailable right now. Try again." },

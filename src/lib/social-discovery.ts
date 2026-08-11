@@ -2243,12 +2243,22 @@ function youtubeDraftProblem(input: {
     if (input.draftMode === "thread" && !input.replyDraft.trim()) {
       return "missing replyDraft for thread mode";
     }
-    return tapInCopyFidelityProblem({
+    const fidelityProblem = tapInCopyFidelityProblem({
       campaignInstructions: input.campaignInstructions,
       brandName: input.brandName,
       commentDraft: input.commentDraft,
       replyDraft: input.replyDraft,
     });
+    if (fidelityProblem) return fidelityProblem;
+    const openingStyleProblem = youtubeCommentStyleProblem(input.commentDraft, "opening", {
+      allowFactualBrandContext: true,
+    });
+    if (openingStyleProblem) return openingStyleProblem;
+    return input.draftMode === "thread"
+      ? youtubeCommentStyleProblem(input.replyDraft, "reply", {
+          allowFactualBrandContext: true,
+        })
+      : "";
   }
   if (input.draftMode === "thread" && !input.replyDraft.trim()) {
     return "missing replyDraft for thread mode";
@@ -2319,7 +2329,8 @@ async function enhanceInteractionPlanWithLlm(
       "TapIn supplies the matched YouTube video title and description"
     );
     const replyMaxLength = 220;
-    const tapInDraft = applyTapInSystemCopyRule;
+    const tapInDraft = (value: unknown) =>
+      normalizeYouTubeCommentCapitalization(applyTapInSystemCopyRule(value));
     let promptUsed = prompt;
     let row = await requestSocialCommentPlan({
       prompt: promptUsed,

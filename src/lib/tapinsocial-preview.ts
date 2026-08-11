@@ -4,7 +4,10 @@ import {
   TAPIN_SYSTEM_COPY_RULE,
 } from "@/lib/tapinsocial-copy";
 import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
-import { normalizeYouTubeCommentCapitalization } from "@/lib/youtube-comment-style";
+import {
+  normalizeYouTubeCommentCapitalization,
+  youtubeCommentStyleProblem,
+} from "@/lib/youtube-comment-style";
 
 export type TapInThreadPreviewInput = {
   campaignType?: "comment" | "thread";
@@ -33,12 +36,22 @@ function structuralProblem(input: {
   const { commentOnly, preview } = input;
   if (!preview.openingComment) return "openingComment is empty";
   if (!commentOnly && !preview.reply) return "reply is empty";
-  return tapInCopyFidelityProblem({
+  const fidelityProblem = tapInCopyFidelityProblem({
     campaignInstructions: input.campaignInstructions,
     brandName: input.brandName,
     commentDraft: preview.openingComment,
     replyDraft: preview.reply,
   });
+  if (fidelityProblem) return fidelityProblem;
+  const openingStyleProblem = youtubeCommentStyleProblem(preview.openingComment, "opening", {
+    allowFactualBrandContext: true,
+  });
+  if (openingStyleProblem) return openingStyleProblem;
+  return commentOnly
+    ? ""
+    : youtubeCommentStyleProblem(preview.reply, "reply", {
+        allowFactualBrandContext: true,
+      });
 }
 
 function structuralRepairPrompt(input: {

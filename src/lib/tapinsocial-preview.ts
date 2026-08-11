@@ -4,6 +4,7 @@ import {
   TAPIN_SYSTEM_COPY_RULE,
 } from "@/lib/tapinsocial-copy";
 import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
+import { normalizeYouTubeCommentCapitalization } from "@/lib/youtube-comment-style";
 
 export type TapInThreadPreviewInput = {
   campaignType?: "comment" | "thread";
@@ -127,8 +128,12 @@ export async function generateTapInThreadPreview(
 
       const parsed = JSON.parse(result.text) as Record<string, unknown>;
       previous = {
-        openingComment: applyTapInSystemCopyRule(parsed.openingComment),
-        reply: commentOnly ? "" : applyTapInSystemCopyRule(parsed.reply),
+        openingComment: normalizeYouTubeCommentCapitalization(
+          applyTapInSystemCopyRule(parsed.openingComment)
+        ),
+        reply: commentOnly
+          ? ""
+          : normalizeYouTubeCommentCapitalization(applyTapInSystemCopyRule(parsed.reply)),
       };
       lastProblem = structuralProblem({
         commentOnly,

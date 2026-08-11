@@ -142,10 +142,10 @@ test("TapIn live generation removes em dashes and normalizes YouTube-native capi
     const request = JSON.parse(String(init?.body ?? "{}")) as {
       messages?: Array<{ role?: string; content?: string }>;
     };
-    assert.deepEqual(request.messages?.[0], {
-      role: "system",
-      content: "Never use em dashes. Use commas, periods, or parentheses instead.",
-    });
+    assert.equal(request.messages?.[0]?.role, "system");
+    assert.match(request.messages?.[0]?.content ?? "", /Never use em dashes/i);
+    assert.match(request.messages?.[0]?.content ?? "", /YouTube-native voice rules/i);
+    assert.match(request.messages?.[0]?.content ?? "", /standard maximum 32 words/i);
     return openRouterResponse({
       headline: "QA after vibe coding",
       fitSummary: "The video is about building and shipping apps with AI.",

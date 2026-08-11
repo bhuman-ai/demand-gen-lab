@@ -86,6 +86,7 @@ test("TapIn retries only an incomplete output and adds no copy rules during repa
     if (requestCount === 2) {
       const prompt = request.messages?.find((message) => message.role === "user")?.content ?? "";
       assert.match(prompt, /structurally invalid because reply is empty/i);
+      assert.match(prompt, /rewrite the complete response so it passes that exact failed check/i);
       assert.match(prompt, /Do not change, reinterpret, or add to the user's copy instructions/i);
       assert.doesNotMatch(prompt, /brand.*aside|affiliation|maximum \d+ words|marketing language/i);
     }
@@ -118,8 +119,16 @@ test("TapIn retries a long AI-style preview before approval", async () => {
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   let requestCount = 0;
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_input, init) => {
     requestCount += 1;
+    if (requestCount === 2) {
+      const request = JSON.parse(String(init?.body ?? "{}")) as {
+        messages?: Array<{ role?: string; content?: string }>;
+      };
+      const prompt = request.messages?.find((message) => message.role === "user")?.content ?? "";
+      assert.match(prompt, /too many words/i);
+      assert.match(prompt, /remove optional detail instead of repeating the same draft/i);
+    }
     return openRouterResponse({
       openingComment:
         requestCount === 1

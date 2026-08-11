@@ -2368,6 +2368,8 @@ async function enhanceInteractionPlanWithLlm(
             prompt,
             "",
             `The previous response was structurally invalid because ${initialProblem}.`,
+            "Rewrite the complete response so it passes that exact failed check.",
+            "If the problem reports too many words or characters, remove optional detail instead of repeating the same draft.",
             "Return the complete JSON object with the required non-empty draft fields.",
             "Do not change, reinterpret, or add to the user's copy instructions.",
           ].join("\n")

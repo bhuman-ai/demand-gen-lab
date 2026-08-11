@@ -31,6 +31,7 @@ import {
 import { checkYouTubeOAuthCredentials, getYouTubeVideoTranscript } from "@/lib/youtube";
 import { selectBalancedAccountPair } from "@/lib/social-discovery-account-rotation";
 import { tapInCopyFidelityProblem } from "@/lib/tapinsocial-copy-fidelity";
+import { youtubeCommentStyleProblem } from "@/lib/youtube-comment-style";
 
 type AutoCommentDispatchOptions = {
   enabled?: boolean;
@@ -247,6 +248,15 @@ function draftProblem(
     replyDraft: pair.reply,
   });
   if (fidelityProblem) return "campaign_copy_fidelity";
+  if (youtubeCommentStyleProblem(pair.comment, "opening", { allowFactualBrandContext: true })) {
+    return "campaign_copy_style";
+  }
+  if (
+    needsReply &&
+    youtubeCommentStyleProblem(pair.reply, "reply", { allowFactualBrandContext: true })
+  ) {
+    return "campaign_copy_style";
+  }
   return "";
 }
 

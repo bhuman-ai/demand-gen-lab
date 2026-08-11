@@ -120,7 +120,7 @@ test("TapIn live prompt reserves one separately supplied system punctuation rule
   );
 });
 
-test("TapIn live generation removes em dashes but preserves every other user-controlled choice", async () => {
+test("TapIn live generation removes em dashes and normalizes YouTube-native capitalization", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   let requestCount = 0;
@@ -129,9 +129,9 @@ test("TapIn live generation removes em dashes but preserves every other user-con
     name: "BeforeUsersDo",
     socialDiscoveryCommentPrompt: [
       "Opening comment instructions:",
-      "Write exactly: my app shipped — bugs everywhere; what now?",
+      "Write exactly: my app shipped — bugs everywhere. what now?",
       "Delayed reply instructions:",
-      "Write exactly: BeforeUsersDo first—I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
+      "Write exactly: BeforeUsersDo first — I work on it. AI personas + recordings help.",
       "Runtime context:",
       "TapIn supplies the matched YouTube video title and description to the generator automatically.",
     ].join("\n"),
@@ -150,8 +150,8 @@ test("TapIn live generation removes em dashes but preserves every other user-con
       headline: "QA after vibe coding",
       fitSummary: "The video is about building and shipping apps with AI.",
       shouldComment: true,
-      commentDraft: "my app shipped — bugs everywhere; what now?",
-      replyDraft: "BeforeUsersDo first—I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!",
+      commentDraft: "my app shipped — bugs everywhere. what now?",
+      replyDraft: "BeforeUsersDo first — I work on it. AI personas + recordings help.",
       assetNeeded: "",
       riskNotes: [],
       exitRules: [],
@@ -170,11 +170,11 @@ test("TapIn live generation removes em dashes but preserves every other user-con
     assert.equal(drafted.interactionPlan.sequence.length, 2);
     assert.equal(
       drafted.interactionPlan.sequence[0]?.draft,
-      "my app shipped, bugs everywhere; what now?"
+      "My app shipped, bugs everywhere. What now?"
     );
     assert.equal(
       drafted.interactionPlan.sequence[1]?.draft,
-      "BeforeUsersDo first, I work on it; use AI personas, include every recording + fix, and keep all this wording exactly as written!!!"
+      "BeforeUsersDo first, I work on it. AI personas + recordings help."
     );
   } finally {
     globalThis.fetch = originalFetch;

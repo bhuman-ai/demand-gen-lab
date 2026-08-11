@@ -36,8 +36,8 @@ test("TapIn preview prompt reserves one separately supplied system punctuation r
 test("TapIn preview removes em dashes and normalizes natural capitalization", async () => {
   const originalFetch = globalThis.fetch;
   const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
-  const openingComment = "my app shipped — bugs everywhere; what now?";
-  const reply = "BeforeUsersDo first: I work on it, use AI personas, then send every recording + fix!!!";
+  const openingComment = "my app shipped — bugs everywhere. what now?";
+  const reply = "BeforeUsersDo first — I work on it. AI personas + recordings help.";
   let requestCount = 0;
   process.env.OPENROUTER_API_KEY = "test-openrouter-key";
   globalThis.fetch = async (_input, init) => {
@@ -63,8 +63,8 @@ test("TapIn preview removes em dashes and normalizes natural capitalization", as
 
     assert.equal(requestCount, 1);
     assert.deepEqual(preview, {
-      openingComment: "My app shipped, bugs everywhere; what now?",
-      reply,
+      openingComment: "My app shipped, bugs everywhere. What now?",
+      reply: "BeforeUsersDo first, I work on it. AI personas + recordings help.",
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -106,6 +106,42 @@ test("TapIn retries only an incomplete output and adds no copy rules during repa
     });
     assert.equal(requestCount, 2);
     assert.equal(preview.reply, "Reply exactly as requested");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+  }
+});
+
+test("TapIn retries a long AI-style preview before approval", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  let requestCount = 0;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+  globalThis.fetch = async () => {
+    requestCount += 1;
+    return openRouterResponse({
+      openingComment:
+        requestCount === 1
+          ? "This is a polished and unnecessarily long explanation of the recipe workflow that keeps going with extra detail about planning every meal and organizing every ingredient before adding a product recommendation that sounds like a marketing assistant wrote it."
+          : "Batching the proteins on Sunday saves so much time. Olyvv can keep recipes like these together too.",
+    });
+  };
+
+  try {
+    const preview = await generateTapInThreadPreview({
+      campaignType: "comment",
+      brandName: "Olyvv",
+      openingPrompt: "Keep it short and casual. Mention Olyvv only as an aside.",
+      replyPrompt: "",
+      videoTitle: "Busy weeknight dinners",
+      videoDescription: "Quick meals for families.",
+    });
+    assert.equal(requestCount, 2);
+    assert.equal(
+      preview.openingComment,
+      "Batching the proteins on Sunday saves so much time. Olyvv can keep recipes like these together too."
+    );
   } finally {
     globalThis.fetch = originalFetch;
     if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;

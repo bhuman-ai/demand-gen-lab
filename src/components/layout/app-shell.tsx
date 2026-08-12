@@ -53,7 +53,12 @@ type MainNavItem = NavItem & {
     | "social-discovery";
 };
 
-const CHROMELESS_ROUTES = new Set(["/autoads", "/google-ads-review", "/liftline"]);
+const CHROMELESS_ROUTES = new Set([
+  "/autoads",
+  "/google-ads-review",
+  "/liftline",
+  "/insights/sustainable-b2b-growth",
+]);
 
 function isInstagramGrowthStandaloneRoute(pathname: string) {
   return /^\/brands\/[^/]+\/instagram-growth(?:\/|$)/.test(pathname);

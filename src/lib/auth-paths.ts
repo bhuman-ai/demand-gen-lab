@@ -1,7 +1,15 @@
 export const AUTHENTICATED_HOME = "/workspace";
 
 const AUTH_PAGE_ROUTES = new Set(["/login", "/signup"]);
-const PUBLIC_PAGE_ROUTES = new Set(["/", "/login", "/signup", "/autoads", "/google-ads-review", "/liftline"]);
+const PUBLIC_PAGE_ROUTES = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/autoads",
+  "/google-ads-review",
+  "/liftline",
+  "/insights/sustainable-b2b-growth",
+]);
 const PUBLIC_API_PREFIXES = ["/api/auth", "/api/build-id", "/api/internal", "/api/webhooks"];
 const PUBLIC_API_ROUTES = new Set(["/api/outreach/accounts/youtube/callback"]);
 

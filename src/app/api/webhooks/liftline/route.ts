@@ -11,6 +11,7 @@ import {
   DEFAULT_SOCIAL_DISCOVERY_YOUTUBE_POLICY,
   normalizeSocialDiscoveryYouTubePolicy,
 } from "@/lib/social-discovery-youtube-policy";
+import { buildTapInCampaignPrompt } from "@/lib/tapinsocial-campaign-prompt";
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -39,26 +40,6 @@ function strings(value: unknown, limit = 12) {
   return Array.from(
     new Set(value.map((entry) => String(entry ?? "").trim()).filter(Boolean))
   ).slice(0, limit);
-}
-
-function contextualCommentPrompt(input: {
-  campaignType: "comment" | "thread";
-  openingCommentPrompt: string;
-  delayedReplyPrompt: string;
-}) {
-  return [
-    "TapIn campaign instructions:",
-    "Opening comment instructions:",
-    input.openingCommentPrompt,
-    input.campaignType === "thread"
-      ? "Delayed reply instructions:"
-      : "Campaign type: Comment only.",
-    input.campaignType === "thread" ? input.delayedReplyPrompt : "",
-    "Runtime context:",
-    "- TapIn supplies the matched YouTube video title and description to the generator automatically.",
-    "- Opening comment instructions apply only to commentDraft.",
-    "- Delayed reply instructions apply only to replyDraft.",
-  ].join("\n");
 }
 
 export async function POST(request: Request) {
@@ -169,7 +150,7 @@ export async function POST(request: Request) {
     tone: String(commentVoice.preset ?? setup.voice ?? "Warm").trim(),
     notes: runtimeNotes,
     product: positioning,
-    socialDiscoveryCommentPrompt: contextualCommentPrompt({
+    socialDiscoveryCommentPrompt: buildTapInCampaignPrompt({
       campaignType,
       openingCommentPrompt: String(
         prompts.openingComment ?? setup.commentPrompt ?? ""
@@ -177,6 +158,7 @@ export async function POST(request: Request) {
       delayedReplyPrompt: String(
         prompts.delayedReply ?? setup.replyPrompt ?? ""
       ).trim(),
+      youtubePolicy,
     }),
     socialDiscoveryPlatforms: platforms.length ? platforms : ["youtube"],
     socialDiscoveryQueries: targets,

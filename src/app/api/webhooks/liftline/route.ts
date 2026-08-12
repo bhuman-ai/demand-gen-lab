@@ -198,6 +198,7 @@ export async function POST(request: Request) {
         brandLimit: 1,
         maxQueries: 4,
         limitPerQuery: 5,
+        preferCampaignQueries: true,
       }).catch(() => null)
     : null;
   const firstScanResult = firstScan?.results?.[0];

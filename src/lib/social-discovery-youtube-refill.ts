@@ -13,6 +13,7 @@ import { discoverYouTubeSearchPostsForBrand } from "@/lib/social-discovery-youtu
 import { hasYouTubeDataApiKey, hasYouTubeOAuthCredentials } from "@/lib/youtube";
 import type { SocialDiscoveryPost } from "@/lib/social-discovery-types";
 import type { SocialDiscoverySearchStrategyQuery } from "@/lib/factory-types";
+import { selectTapInCampaignQueriesForRun } from "@/lib/tapinsocial-search-plan";
 
 type YouTubeRefillOptions = {
   brandIds?: string[];
@@ -20,6 +21,7 @@ type YouTubeRefillOptions = {
   brandLimit?: number;
   maxQueries?: number;
   limitPerQuery?: number;
+  preferCampaignQueries?: boolean;
 };
 
 function uniqueStrings(values: string[]) {
@@ -179,16 +181,27 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
   for (const brand of brands) {
     const campaignBrand = socialDiscoveryCampaignBrand(brand);
     const startedAt = new Date().toISOString();
-    const strategyResult = await resolveYouTubeSearchStrategyForBrand({
-      brand: campaignBrand,
-      maxQueries: strategyMaxQueries,
-      persist: true,
-    });
-    const queryPlan = selectYouTubeSearchQueriesForRun({
-      strategy: strategyResult.strategy,
-      maxQueries,
-      rotationBucketMinutes: 60,
-    });
+    const campaignQueryPlan = options.preferCampaignQueries
+      ? selectTapInCampaignQueriesForRun({
+          queries: campaignBrand.socialDiscoveryQueries,
+          maxQueries,
+          rotationBucketMinutes: 60,
+        })
+      : [];
+    const strategyResult = campaignQueryPlan.length
+      ? null
+      : await resolveYouTubeSearchStrategyForBrand({
+          brand: campaignBrand,
+          maxQueries: strategyMaxQueries,
+          persist: true,
+        });
+    const queryPlan = campaignQueryPlan.length
+      ? campaignQueryPlan
+      : selectYouTubeSearchQueriesForRun({
+          strategy: strategyResult!.strategy,
+          maxQueries,
+          rotationBucketMinutes: 60,
+        });
     const queries = uniqueStrings(queryPlan.map((query) => query.query));
     if (!queries.length) {
       results.push({
@@ -197,8 +210,8 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
         skipped: true,
         reason: "no_strategy_queries",
         savedSearches: 0,
-        generatedStrategy: strategyResult.generated,
-        persistedStrategy: strategyResult.persisted,
+        generatedStrategy: strategyResult?.generated ?? false,
+        persistedStrategy: strategyResult?.persisted ?? false,
         found: 0,
         eligible: 0,
         accepted: 0,
@@ -220,7 +233,7 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
     const strategyPosts = annotatePostsWithQueryStrategy({
       posts: discovery.posts,
       queries: queryPlan,
-      strategyGeneratedAt: strategyResult.strategy.generatedAt,
+      strategyGeneratedAt: strategyResult?.strategy.generatedAt ?? startedAt,
     });
     const savedPosts = strategyPosts.length ? await saveSocialDiscoveryPosts(strategyPosts) : [];
     const queryDiagnostics = queryRunDiagnostics({
@@ -245,9 +258,9 @@ export async function runSocialDiscoveryYouTubeRefillTick(options: YouTubeRefill
       brandName: campaignBrand.name,
       runId: run.id,
       savedSearches: queries.length,
-      generatedStrategy: strategyResult.generated,
-      persistedStrategy: strategyResult.persisted,
-      strategySource: strategyResult.strategy.source,
+      generatedStrategy: strategyResult?.generated ?? false,
+      persistedStrategy: strategyResult?.persisted ?? false,
+      strategySource: campaignQueryPlan.length ? "campaign_targets" : strategyResult!.strategy.source,
       queryFamilies: queryFamilyCounts(queryPlan),
       found: discovery.summary.found,
       eligible: discovery.summary.eligible,

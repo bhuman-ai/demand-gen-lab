@@ -111,6 +111,7 @@ export async function runTapInYouTubeRefill() {
     brandLimit: brandIds.length,
     maxQueries: envNumber("TAPIN_SOCIAL_REFILL_MAX_QUERIES", 4, 1, 8),
     limitPerQuery: envNumber("TAPIN_SOCIAL_REFILL_LIMIT_PER_QUERY", 5, 1, 25),
+    preferCampaignQueries: true,
   });
 }
 

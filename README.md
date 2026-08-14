@@ -47,6 +47,11 @@ Copy `.env.example` to `.env.local` and fill values:
 - `EMAIL_FINDER_EXTERNAL_WATERFALL_ENABLED` (optional, set `true` to let the email finder use external paid fallback)
 - `NAMECHEAP_RELAY_URL` (optional, routes Namecheap API calls through a fixed-IP relay)
 - `NAMECHEAP_RELAY_TOKEN` (optional bearer token for that relay)
+- `LIFTLINE_AUTOPILOT_WEBHOOK_SECRET` (authenticates TapIn frontend calls to the protected backend routes)
+- `CLUSTERSEO_API_URL=https://www.clusterseo.com`
+- `CLUSTERSEO_TAPIN_SHARED_SECRET` (same high-entropy HMAC secret in ClusterSEO and TapInSocial)
+
+Apply Supabase migration `20260814123000_tapinsocial_clusterseo_deliveries.sql` before enabling ClusterSEO comment delivery. Its service-role-only ledger makes YouTube posting idempotent: a retry settles the existing verified comment instead of posting it again.
 
 ## Scheduler (Cloudflare Worker)
 

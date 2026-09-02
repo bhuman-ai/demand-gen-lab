@@ -15,10 +15,17 @@ async function handle(request: Request) {
   const forceDryRun = ["1", "true", "yes", "on"].includes(
     String(url.searchParams.get("dryRun") ?? "").trim().toLowerCase()
   );
+  const previewWelcomeGiftComments = ["1", "true", "yes", "on"].includes(
+    String(url.searchParams.get("welcomeGiftPreview") ?? "").trim().toLowerCase()
+  );
   const dispatch = await runAndRecordTapInTask({
     name: "tapInSocialDispatch",
     route: url.pathname,
-    task: () => runTapInDispatch({ forceDryRun }),
+    task: () =>
+      runTapInDispatch({
+        forceDryRun: forceDryRun || previewWelcomeGiftComments,
+        previewWelcomeGiftComments,
+      }),
   });
   return NextResponse.json({ ok: dispatch.ok, criticalPath: "tapin-youtube-dispatch", dispatch });
 }

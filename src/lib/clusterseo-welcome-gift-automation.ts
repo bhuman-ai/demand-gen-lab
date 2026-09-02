@@ -149,7 +149,9 @@ function eligibleOpportunities(
   );
 }
 
-export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: boolean } = {}) {
+export async function runClusterSeoWelcomeGiftAutomation(
+  input: { forceDryRun?: boolean; previewComments?: boolean } = {}
+) {
   const config = clusterSeoWelcomeGiftAutomationConfig();
   const dryRun = config.dryRun || input.forceDryRun === true;
   if (!config.enabled || !config.configured) {
@@ -238,6 +240,26 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
         }
         attempted += 1;
         if (dryRun) {
+          if (input.previewComments) {
+            const draft = (
+              await callClusterSeoNetwork<ClusterSeoDraft>({
+                action: "draft",
+                identity: networkIdentity,
+                missionId: opportunity.id,
+              })
+            ).draft;
+            const quality = validateAutomatedWelcomeGiftComment({ value: draft, opportunity });
+            results.push({
+              userId,
+              missionId: opportunity.id,
+              accountId: account.accountId,
+              status: quality.valid ? "preview_ready" : "preview_blocked",
+              targetPostTitle: opportunity.targetPostTitle,
+              draft: quality.text,
+              qualityReasons: quality.reasons,
+            });
+            continue;
+          }
           results.push({
             userId,
             missionId: opportunity.id,
@@ -290,7 +312,11 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
   }
 
   return {
-    ok: !results.some((result) => result.status === "failed" || result.status === "blocked"),
+    ok: !results.some((result) =>
+      result.status === "failed" ||
+      result.status === "blocked" ||
+      result.status === "preview_blocked"
+    ),
     skipped: false,
     dryRun,
     attempted,

@@ -175,6 +175,19 @@ test("automated comments reject abstract workflow language after transcript grou
   assert.deepEqual(result.reasons, ["generic_comment"]);
 });
 
+test("automated comments reject generic interface language that cites no real feature", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "The walkthrough breaks down how the platform manages content flow in one interface, which helps keep handoffs smooth. BHuman’s design supports that kind of consistency.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment"]);
+});
+
 test("automated comments accept a concrete operational observation", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:

@@ -10,6 +10,7 @@ const GENERIC_COMMENT_PHRASES = [
   "feels",
   "feels pretty balanced",
   "helps clarify",
+  "helps keep",
   "helps understand",
   "helps you understand",
   "helpful overview",
@@ -21,11 +22,13 @@ const GENERIC_COMMENT_PHRASES = [
   "nice overview",
   "isolated parts",
   "in one place",
+  "in one interface",
   "juggling multiple",
   "rather than just",
   "on youtube",
   "seems",
   "solid range of features",
+  "supports that",
   "thoughtfully",
   "youtube lets you",
   "share original content",
@@ -36,6 +39,7 @@ const GENERIC_COMMENT_PHRASES = [
   "without getting overwhelming",
   "without overcomplicating",
   "workflow smooth",
+  "kind of consistency",
 ];
 
 const TITLE_CUE_STOPWORDS = new Set([

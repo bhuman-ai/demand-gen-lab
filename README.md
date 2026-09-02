@@ -50,8 +50,15 @@ Copy `.env.example` to `.env.local` and fill values:
 - `LIFTLINE_AUTOPILOT_WEBHOOK_SECRET` (authenticates TapIn frontend calls to the protected backend routes)
 - `CLUSTERSEO_API_URL=https://www.clusterseo.com`
 - `CLUSTERSEO_TAPIN_SHARED_SECRET` (same high-entropy HMAC secret in ClusterSEO and TapInSocial)
+- `CLUSTERSEO_WELCOME_GIFT_AUTOMATION_ENABLED` (optional, default `false`; enables automatic delivery only for allowlisted, self-owned ClusterSEO YouTube welcome gifts)
+- `CLUSTERSEO_WELCOME_GIFT_AUTOMATION_DRY_RUN` (optional, default `true`; set `false` only after validating the production allowlists)
+- `CLUSTERSEO_WELCOME_GIFT_AUTOMATION_USER_IDS` (comma-separated TapIn user UUID allowlist)
+- `CLUSTERSEO_WELCOME_GIFT_AUTOMATION_TARGET_DOMAINS` (comma-separated target-domain allowlist, for example `bhuman.ai`)
+- `CLUSTERSEO_WELCOME_GIFT_AUTOMATION_PER_RUN_CAP` (optional, default `1`, hard maximum `3`)
 
 Apply Supabase migration `20260814123000_tapinsocial_clusterseo_deliveries.sql` before enabling ClusterSEO comment delivery. Its service-role-only ledger makes YouTube posting idempotent: a retry settles the existing verified comment instead of posting it again.
+
+The five-minute TapIn dispatch worker can also fulfill an allowlisted ClusterSEO welcome gift without a member approval click. It accepts only `YOUTUBE` `COMMENT` opportunities whose source ends in `:welcome_youtube_gift`, whose target belongs to the connected ClusterSEO user, and whose normalized domain is explicitly allowlisted. It uses the existing ClusterSEO draft, signed grant, YouTube verification, idempotent delivery ledger, and settlement path. Ordinary TapIn campaigns remain unchanged and manual.
 
 ## Scheduler (Cloudflare Worker)
 

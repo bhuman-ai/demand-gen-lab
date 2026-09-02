@@ -14,6 +14,59 @@ type DeliveryClaims = {
   expiresAt: number;
 };
 
+export type ClusterSeoTapInIdentity = {
+  providerUserId: string;
+  email: string;
+  name: string;
+  selectedAccountId?: string;
+  youtubeAccounts: Array<{
+    accountId: string;
+    channelId: string;
+    name: string;
+    handle: string;
+  }>;
+};
+
+export type ClusterSeoOpportunity = {
+  id: string;
+  platform: string;
+  actionKind: string;
+  targetPostUrl: string;
+  targetPostTitle: string;
+  targetBrandName: string;
+  targetBrandUserId: string;
+  targetDomainToken: string;
+  rewardCredits: number;
+  sourceProvider: string;
+};
+
+export type ClusterSeoOpportunityList = {
+  success: true;
+  connection: {
+    clusterUserId: string;
+    credits: number;
+  };
+  opportunities: ClusterSeoOpportunity[];
+};
+
+export type ClusterSeoDraft = {
+  success: true;
+  draft: string;
+  mentionHint: string;
+};
+
+export type ClusterSeoGrant = {
+  success: true;
+  deliveryToken: string;
+  expiresAt: string;
+  mission: {
+    id: string;
+    videoUrl: string;
+    title: string;
+    rewardCredits: number;
+  };
+};
+
 function cleanUrl(value: string) {
   const raw = value.trim();
   if (!raw) return "";
@@ -42,6 +95,56 @@ function safeEqual(left: string, right: string) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export function clusterSeoTapInIdentity(input: {
+  userId: string;
+  email: string;
+  name: string;
+  workspace: TapInAuthWorkspace;
+  selectedAccountId?: string;
+}): ClusterSeoTapInIdentity {
+  return {
+    providerUserId: input.userId,
+    email: input.email,
+    name: input.name,
+    selectedAccountId: input.selectedAccountId || input.workspace.youtubeAccountId || undefined,
+    youtubeAccounts: input.workspace.youtubeAccounts.map((account) => ({
+      accountId: account.accountId,
+      channelId: account.channelId,
+      name: account.name,
+      handle: account.handle,
+    })),
+  };
+}
+
+export async function callClusterSeoNetwork<T>(body: Record<string, unknown>) {
+  const rawBody = JSON.stringify(body);
+  const timestamp = Date.now();
+  const response = await fetch(`${clusterSeoUrl()}/api/integrations/tapinsocial/network`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-tapin-timestamp": String(timestamp),
+      "x-tapin-signature": `v1=${hmac(`${timestamp}.${rawBody}`)}`,
+    },
+    body: rawBody,
+    cache: "no-store",
+  });
+  const payload = (await response.json().catch(() => ({}))) as T & {
+    error?: string;
+    code?: string;
+  };
+  if (!response.ok) {
+    const error = new Error(payload.error || "ClusterSEO could not complete this request.") as Error & {
+      status?: number;
+      code?: string;
+    };
+    error.status = response.status;
+    error.code = payload.code;
+    throw error;
+  }
+  return payload;
 }
 
 export function hashTapInNetworkComment(text: string) {
@@ -86,20 +189,20 @@ export async function settleClusterSeoDelivery(input: {
   postedAt: string;
   deliveryToken: string;
 }) {
-  const body = JSON.stringify({
+  return callClusterSeoNetwork<{
+    alreadyProcessed?: boolean;
+    submissionId?: string;
+    creditsAwarded?: number;
+    creditBalance?: number;
+  }>({
     action: "settle",
-    identity: {
-      providerUserId: input.userId,
+    identity: clusterSeoTapInIdentity({
+      userId: input.userId,
       email: input.email,
       name: input.name,
+      workspace: input.workspace,
       selectedAccountId: input.accountId,
-      youtubeAccounts: input.workspace.youtubeAccounts.map((account) => ({
-        accountId: account.accountId,
-        channelId: account.channelId,
-        name: account.name,
-        handle: account.handle,
-      })),
-    },
+    }),
     delivery: {
       eventId: input.eventId,
       missionId: input.missionId,
@@ -112,30 +215,4 @@ export async function settleClusterSeoDelivery(input: {
       deliveryToken: input.deliveryToken,
     },
   });
-  const timestamp = Date.now();
-  const response = await fetch(`${clusterSeoUrl()}/api/integrations/tapinsocial/network`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-tapin-timestamp": String(timestamp),
-      "x-tapin-signature": `v1=${hmac(`${timestamp}.${body}`)}`,
-    },
-    body,
-    cache: "no-store",
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    error?: string;
-    code?: string;
-    alreadyProcessed?: boolean;
-    submissionId?: string;
-    creditsAwarded?: number;
-    creditBalance?: number;
-  };
-  if (!response.ok) {
-    const error = new Error(payload.error || "ClusterSEO could not settle this delivery.") as Error & { status?: number; code?: string };
-    error.status = response.status;
-    error.code = payload.code;
-    throw error;
-  }
-  return payload;
 }

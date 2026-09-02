@@ -69,7 +69,7 @@ function database() {
   return supabase;
 }
 
-async function getByMissionId(missionId: string) {
+export async function getTapInNetworkDeliveryByMissionId(missionId: string) {
   const { data, error } = await database().from(TABLE).select("*").eq("mission_id", missionId).maybeSingle();
   if (error) throw new Error(`TapIn delivery lookup failed: ${error.message}`);
   return data ? mapDelivery(data) : null;
@@ -107,7 +107,7 @@ export async function claimTapInNetworkDelivery(input: {
     throw new Error(`TapIn delivery claim failed: ${error?.message || "Unknown storage error"}`);
   }
 
-  let existing = await getByMissionId(input.missionId);
+  let existing = await getTapInNetworkDeliveryByMissionId(input.missionId);
   if (!existing) throw new Error("TapIn delivery claim was lost after a duplicate request.");
   const exactMatch =
     existing.tapInUserId === input.tapInUserId &&

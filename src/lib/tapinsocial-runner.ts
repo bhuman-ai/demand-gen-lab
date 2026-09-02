@@ -1,4 +1,5 @@
 import { recordInternalCronRun, runCronTask } from "@/lib/internal-cron";
+import { runClusterSeoWelcomeGiftAutomation } from "@/lib/clusterseo-welcome-gift-automation";
 import { listBrands } from "@/lib/factory-data";
 import { listSocialRoutingAccounts } from "@/lib/outreach-data";
 import { runSocialDiscoveryAutoCommentDispatchTick } from "@/lib/social-discovery-comment-dispatch";
@@ -116,17 +117,19 @@ export async function runTapInYouTubeRefill() {
 }
 
 export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
+  const clusterSeoWelcomeGifts = await runClusterSeoWelcomeGiftAutomation(input);
   const config = tapInRunnerConfig();
   const brandIds = await activeTapInRunnerBrandIds();
   const dryRun = config.dryRun || input.forceDryRun === true;
   if (!config.enabled || !brandIds.length) {
     return {
-      ok: true,
+      ok: clusterSeoWelcomeGifts.ok,
       skipped: true,
       reason: !config.enabled ? "runner_disabled" : "brand_allowlist_missing",
       dryRun,
       brands: [],
       delayedReplies: null,
+      clusterSeoWelcomeGifts,
     };
   }
 
@@ -158,7 +161,14 @@ export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
     limit: 25,
     dryRun,
   });
-  return { ok: true, skipped: false, dryRun, brands, delayedReplies };
+  return {
+    ok: clusterSeoWelcomeGifts.ok,
+    skipped: false,
+    dryRun,
+    brands,
+    delayedReplies,
+    clusterSeoWelcomeGifts,
+  };
 }
 
 export async function runAndRecordTapInTask<T>(input: {

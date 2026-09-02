@@ -28,7 +28,9 @@ export type TapInAuthWorkspace = {
 
 type TapInAuthUser = {
   id: string;
+  email?: string | null;
   app_metadata?: Record<string, unknown> | null;
+  user_metadata?: Record<string, unknown> | null;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -161,14 +163,29 @@ async function getTapInUser(userId: string): Promise<TapInAuthUser | null> {
   return data.user;
 }
 
-export async function getTapInWorkspaceForUser(userId: string) {
-  const user = await getTapInUser(userId);
-  if (!user) return null;
+async function workspaceForTapInUser(user: TapInAuthUser) {
   const workspace = tapInWorkspaceFromUser(user);
   if (!workspace) return null;
   const enriched = await enrichWorkspace(workspace);
   if (JSON.stringify(enriched) !== JSON.stringify(workspace)) return saveWorkspace(user, enriched);
   return enriched;
+}
+
+export async function getTapInWorkspaceForUser(userId: string) {
+  const user = await getTapInUser(userId);
+  if (!user) return null;
+  return workspaceForTapInUser(user);
+}
+
+export async function getTapInAutomationIdentityForUser(userId: string) {
+  const user = await getTapInUser(userId);
+  if (!user) return null;
+  const workspace = await workspaceForTapInUser(user);
+  const email = String(user.email ?? "").trim().toLowerCase();
+  if (!workspace || !email) return null;
+  const metadata = user.user_metadata ?? {};
+  const name = String(metadata.full_name ?? metadata.name ?? "").trim() || email.split("@")[0] || "TapIn member";
+  return { userId: user.id, email, name, workspace };
 }
 
 export function workspaceOwnsYouTubeAccount(workspace: TapInAuthWorkspace, accountId: string) {

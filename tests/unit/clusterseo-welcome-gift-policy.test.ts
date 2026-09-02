@@ -149,6 +149,32 @@ test("automated comments reject hedged AI-style language from the revised previe
   assert.deepEqual(result.reasons, ["generic_comment", "missing_reason_or_implication"]);
 });
 
+test("automated comments reject abstract reviewer language from the final preview", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "This full platform walkthrough helps clarify how each feature fits together, which makes BHuman easier to understand rather than just seeing isolated parts.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment"]);
+});
+
+test("automated comments accept a concrete operational observation", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "Turning one recording into personalized videos for every lead matters because the workflow has to stay manageable as the campaign scales. BHuman shows that here.",
+    opportunity: candidate({
+      targetPostTitle: "How to Create Personalized AI Videos at Scale with BHuman 2.0",
+    }),
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.reasons, []);
+});
+
 test("automated comments require a brand mention and a distinctive title cue", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:

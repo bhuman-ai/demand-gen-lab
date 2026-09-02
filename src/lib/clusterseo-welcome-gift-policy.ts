@@ -4,13 +4,20 @@ const GENERIC_COMMENT_PHRASES = [
   "approach to",
   "covers a solid range",
   "does a good job",
+  "easier to follow",
+  "feels",
   "feels pretty balanced",
   "helpful overview",
+  "interesting how",
   "it is cool how",
   "it's cool how",
   "i love how",
+  "makes it easier to see",
   "nice overview",
+  "on youtube",
+  "seems",
   "solid range of features",
+  "thoughtfully",
   "youtube lets you",
   "share original content",
   "friends and family",
@@ -18,6 +25,7 @@ const GENERIC_COMMENT_PHRASES = [
   "great video",
   "nice video",
   "without getting overwhelming",
+  "without overcomplicating",
 ];
 
 const TITLE_CUE_STOPWORDS = new Set([
@@ -208,6 +216,9 @@ export function validateAutomatedWelcomeGiftComment(input: {
   if (words.length > 40) reasons.push("too_long");
   if (GENERIC_COMMENT_PHRASES.some((phrase) => lower.includes(phrase))) {
     reasons.push("generic_comment");
+  }
+  if (!/\b(?:because|so|which|rather than|instead of|that means)\b/i.test(text)) {
+    reasons.push("missing_reason_or_implication");
   }
   if (/[!\u{1F300}-\u{1FAFF}]/u.test(text)) reasons.push("hype_or_emoji");
   if (

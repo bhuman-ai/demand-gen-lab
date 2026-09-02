@@ -116,7 +116,11 @@ test("automated comments reject the exact generic YouTube boilerplate failure", 
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_title_context"]);
+  assert.deepEqual(result.reasons, [
+    "generic_comment",
+    "missing_reason_or_implication",
+    "missing_title_context",
+  ]);
 });
 
 test("automated comments reject bland praise from the production preview", () => {
@@ -129,13 +133,26 @@ test("automated comments reject bland praise from the production preview", () =>
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_reason_or_implication"]);
+});
+
+test("automated comments reject hedged AI-style language from the revised preview", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "The full platform walkthrough makes it easier to see how different tools work together on YouTube. Bhuman’s setup seems thoughtfully organized without overcomplicating things.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_reason_or_implication"]);
 });
 
 test("automated comments require a brand mention and a distinctive title cue", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:
-      "The practical point is making AI videos feel less cringe, not just faster. BHuman looks much closer to something a team could actually send.",
+      "AI videos need to feel less cringe because faster output does not matter if teams will not send it. BHuman gets much closer to that bar.",
     opportunity: candidate({
       targetPostTitle: "Actually human AI videos that do not look cringe | BHuman Speakeasy",
     }),
@@ -143,7 +160,7 @@ test("automated comments require a brand mention and a distinctive title cue", (
 
   assert.deepEqual(result, {
     text:
-      "The practical point is making AI videos feel less cringe, not just faster. BHuman looks much closer to something a team could actually send.",
+      "AI videos need to feel less cringe because faster output does not matter if teams will not send it. BHuman gets much closer to that bar.",
     valid: true,
     reasons: [],
     titleCues: ["actually", "human", "cringe", "speakeasy"],

@@ -162,6 +162,19 @@ test("automated comments reject abstract reviewer language from the final previe
   assert.deepEqual(result.reasons, ["generic_comment"]);
 });
 
+test("automated comments reject abstract workflow language after transcript grounding", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "The full platform walkthrough shows how BHuman handles video personalization steps in one place, which helps keep the workflow smooth instead of juggling multiple apps.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment"]);
+});
+
 test("automated comments accept a concrete operational observation", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:

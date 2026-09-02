@@ -78,6 +78,29 @@ export function isAutomatableClusterSeoWelcomeGift(input: {
   );
 }
 
+export function explainClusterSeoWelcomeGiftEligibility(input: {
+  opportunity: ClusterSeoWelcomeGiftCandidate;
+  clusterUserId: string;
+  targetDomains: string[];
+}) {
+  const opportunity = input.opportunity;
+  const targetDomain = normalizeClusterSeoTargetDomain(opportunity.targetDomainToken);
+  const checks = {
+    youtubeComment: opportunity.platform === "YOUTUBE" && opportunity.actionKind === "COMMENT",
+    selfOwned: opportunity.targetBrandUserId === input.clusterUserId,
+    welcomeGiftTagged: String(opportunity.sourceProvider || "")
+      .trim()
+      .endsWith(CLUSTERSEO_WELCOME_GIFT_SOURCE_SUFFIX),
+    targetDomainAllowlisted: input.targetDomains.includes(targetDomain),
+  };
+  return {
+    missionId: opportunity.id,
+    targetDomain,
+    checks,
+    eligible: Object.values(checks).every(Boolean),
+  };
+}
+
 export function normalizeAutomatedWelcomeGiftComment(value: unknown) {
   return String(value ?? "")
     .replace(/[\u2013\u2014]/g, "-")

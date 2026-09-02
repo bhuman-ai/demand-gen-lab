@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clusterSeoWelcomeGiftAutomationConfig,
+  explainClusterSeoWelcomeGiftEligibility,
   isAutomatableClusterSeoWelcomeGift,
   normalizeAutomatedWelcomeGiftComment,
   normalizeClusterSeoTargetDomain,
@@ -63,6 +64,27 @@ test("only self-owned, tagged, domain-allowlisted YouTube comments are automatic
   assert.equal(accepts({ targetDomainToken: "example.com" }), false);
   assert.equal(accepts({ platform: "LINKEDIN" }), false);
   assert.equal(accepts({ actionKind: "LIKE" }), false);
+});
+
+test("eligibility diagnostics expose only bounded checks", () => {
+  assert.deepEqual(
+    explainClusterSeoWelcomeGiftEligibility({
+      opportunity: candidate({ targetDomainToken: "other.example" }),
+      clusterUserId,
+      targetDomains: ["bhuman.ai"],
+    }),
+    {
+      missionId: "4591bbf7-b8b4-4859-92d6-55c519f0c849",
+      targetDomain: "other.example",
+      checks: {
+        youtubeComment: true,
+        selfOwned: true,
+        welcomeGiftTagged: true,
+        targetDomainAllowlisted: false,
+      },
+      eligible: false,
+    }
+  );
 });
 
 test("domain and comment normalization remove presentation differences and long dashes", () => {

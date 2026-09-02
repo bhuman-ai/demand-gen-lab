@@ -11,6 +11,7 @@ import {
 } from "@/lib/clusterseo-integration";
 import {
   clusterSeoWelcomeGiftAutomationConfig,
+  explainClusterSeoWelcomeGiftEligibility,
   isAutomatableClusterSeoWelcomeGift,
   normalizeAutomatedWelcomeGiftComment,
 } from "@/lib/clusterseo-welcome-gift-policy";
@@ -186,7 +187,18 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
         config.targetDomains
       );
       if (!opportunities.length) {
-        results.push({ userId, status: "skipped", reason: "eligible_welcome_gift_missing" });
+        results.push({
+          userId,
+          status: "skipped",
+          reason: "eligible_welcome_gift_missing",
+          candidates: (listed.opportunities || []).slice(0, 20).map((opportunity) =>
+            explainClusterSeoWelcomeGiftEligibility({
+              opportunity,
+              clusterUserId: listed.connection.clusterUserId,
+              targetDomains: config.targetDomains,
+            })
+          ),
+        });
         continue;
       }
 

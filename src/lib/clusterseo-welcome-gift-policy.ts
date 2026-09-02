@@ -1,15 +1,23 @@
 export const CLUSTERSEO_WELCOME_GIFT_SOURCE_SUFFIX = ":welcome_youtube_gift";
 
 const GENERIC_COMMENT_PHRASES = [
+  "approach to",
+  "covers a solid range",
+  "does a good job",
+  "feels pretty balanced",
+  "helpful overview",
   "it is cool how",
   "it's cool how",
   "i love how",
+  "nice overview",
+  "solid range of features",
   "youtube lets you",
   "share original content",
   "friends and family",
   "enjoy the videos and music",
   "great video",
   "nice video",
+  "without getting overwhelming",
 ];
 
 const TITLE_CUE_STOPWORDS = new Set([

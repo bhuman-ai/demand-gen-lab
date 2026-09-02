@@ -1,5 +1,34 @@
 export const CLUSTERSEO_WELCOME_GIFT_SOURCE_SUFFIX = ":welcome_youtube_gift";
 
+const GENERIC_COMMENT_PHRASES = [
+  "it is cool how",
+  "it's cool how",
+  "i love how",
+  "youtube lets you",
+  "share original content",
+  "friends and family",
+  "enjoy the videos and music",
+  "great video",
+  "nice video",
+];
+
+const TITLE_CUE_STOPWORDS = new Set([
+  "about",
+  "bhuman",
+  "create",
+  "creating",
+  "from",
+  "full",
+  "platform",
+  "the",
+  "this",
+  "using",
+  "video",
+  "videos",
+  "with",
+  "youtube",
+]);
+
 export type ClusterSeoWelcomeGiftCandidate = {
   id: string;
   platform: string;
@@ -47,6 +76,9 @@ export function clusterSeoWelcomeGiftAutomationConfig(
   const userIds = csv(env.CLUSTERSEO_WELCOME_GIFT_AUTOMATION_USER_IDS).filter((value) =>
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   );
+  const accountIds = csv(env.CLUSTERSEO_WELCOME_GIFT_AUTOMATION_ACCOUNT_IDS).filter((value) =>
+    /^acct_[a-z0-9]+$/i.test(value)
+  );
   const targetDomains = Array.from(
     new Set(
       csv(env.CLUSTERSEO_WELCOME_GIFT_AUTOMATION_TARGET_DOMAINS)
@@ -60,9 +92,10 @@ export function clusterSeoWelcomeGiftAutomationConfig(
     enabled,
     dryRun,
     userIds,
+    accountIds,
     targetDomains,
     perRunCap,
-    configured: userIds.length > 0 && targetDomains.length > 0,
+    configured: userIds.length > 0 && accountIds.length > 0 && targetDomains.length > 0,
   };
 }
 
@@ -112,4 +145,74 @@ export function normalizeAutomatedWelcomeGiftComment(value: unknown) {
     .replace(/[\u2013\u2014]/g, "-")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function titleCues(value: unknown, brandName: unknown) {
+  const brandTokens = new Set(
+    String(brandName ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
+  return Array.from(
+    new Set(
+      String(value ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter(
+          (word) =>
+            word.length >= 5 &&
+            !TITLE_CUE_STOPWORDS.has(word) &&
+            !brandTokens.has(word) &&
+            !/^\d+$/.test(word)
+        )
+    )
+  );
+}
+
+export function validateAutomatedWelcomeGiftComment(input: {
+  value: unknown;
+  opportunity: Pick<
+    ClusterSeoWelcomeGiftCandidate,
+    "targetBrandName" | "targetDomainToken" | "targetPostTitle"
+  >;
+}) {
+  const text = normalizeAutomatedWelcomeGiftComment(input.value);
+  const lower = text.toLowerCase();
+  const words = text.split(/\s+/).filter(Boolean);
+  const commentTokens = new Set(
+    lower
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+  );
+  const cues = titleCues(input.opportunity.targetPostTitle, input.opportunity.targetBrandName);
+  const brandName = String(input.opportunity.targetBrandName ?? "").trim().toLowerCase();
+  const domainCore = normalizeClusterSeoTargetDomain(input.opportunity.targetDomainToken)
+    .split(".")[0]
+    ?.replace(/[^a-z0-9]/g, "") ?? "";
+  const compactText = lower.replace(/[^a-z0-9]/g, "");
+  const reasons: string[] = [];
+
+  if (words.length < 12) reasons.push("too_short");
+  if (words.length > 40) reasons.push("too_long");
+  if (GENERIC_COMMENT_PHRASES.some((phrase) => lower.includes(phrase))) {
+    reasons.push("generic_comment");
+  }
+  if (/[!\u{1F300}-\u{1FAFF}]/u.test(text)) reasons.push("hype_or_emoji");
+  if (
+    !(
+      (brandName && lower.includes(brandName)) ||
+      (domainCore && compactText.includes(domainCore))
+    )
+  ) {
+    reasons.push("missing_brand_mention");
+  }
+  if (!cues.length || !cues.some((cue) => commentTokens.has(cue))) {
+    reasons.push("missing_title_context");
+  }
+
+  return { text, valid: reasons.length === 0, reasons, titleCues: cues };
 }

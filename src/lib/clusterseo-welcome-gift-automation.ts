@@ -13,7 +13,7 @@ import {
   clusterSeoWelcomeGiftAutomationConfig,
   explainClusterSeoWelcomeGiftEligibility,
   isAutomatableClusterSeoWelcomeGift,
-  normalizeAutomatedWelcomeGiftComment,
+  validateAutomatedWelcomeGiftComment,
 } from "@/lib/clusterseo-welcome-gift-policy";
 import { getOutreachAccount, getOutreachAccountSecrets } from "@/lib/outreach-data";
 import { getTapInAutomationIdentityForUser } from "@/lib/tapinsocial-auth";
@@ -125,10 +125,16 @@ async function deliverComment(input: {
   return payload;
 }
 
-function validComment(value: unknown) {
-  const text = normalizeAutomatedWelcomeGiftComment(value);
+function validComment(value: unknown, opportunity: ClusterSeoOpportunity) {
+  const quality = validateAutomatedWelcomeGiftComment({ value, opportunity });
+  const text = quality.text;
   if (text.length < 10 || text.length > 1250) {
     throw new Error("ClusterSEO returned an invalid welcome gift comment length.");
+  }
+  if (!quality.valid) {
+    throw new Error(
+      `ClusterSEO returned a low-quality welcome gift comment: ${quality.reasons.join(", ")}.`
+    );
   }
   return text;
 }
@@ -143,7 +149,9 @@ function eligibleOpportunities(
   );
 }
 
-export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: boolean } = {}) {
+export async function runClusterSeoWelcomeGiftAutomation(
+  input: { forceDryRun?: boolean; previewComments?: boolean } = {}
+) {
   const config = clusterSeoWelcomeGiftAutomationConfig();
   const dryRun = config.dryRun || input.forceDryRun === true;
   if (!config.enabled || !config.configured) {
@@ -166,9 +174,11 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
         results.push({ userId, status: "skipped", reason: "tapin_identity_missing" });
         continue;
       }
-      const accounts = await usableAccounts(identity);
+      const accounts = (await usableAccounts(identity)).filter((account) =>
+        config.accountIds.includes(account.accountId)
+      );
       if (!accounts.length) {
-        results.push({ userId, status: "skipped", reason: "connected_youtube_account_missing" });
+        results.push({ userId, status: "skipped", reason: "allowlisted_youtube_account_missing" });
         continue;
       }
       const networkIdentity = clusterSeoTapInIdentity({
@@ -230,6 +240,26 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
         }
         attempted += 1;
         if (dryRun) {
+          if (input.previewComments) {
+            const draft = (
+              await callClusterSeoNetwork<ClusterSeoDraft>({
+                action: "draft",
+                identity: networkIdentity,
+                missionId: opportunity.id,
+              })
+            ).draft;
+            const quality = validateAutomatedWelcomeGiftComment({ value: draft, opportunity });
+            results.push({
+              userId,
+              missionId: opportunity.id,
+              accountId: account.accountId,
+              status: quality.valid ? "preview_ready" : "preview_blocked",
+              targetPostTitle: opportunity.targetPostTitle,
+              draft: quality.text,
+              qualityReasons: quality.reasons,
+            });
+            continue;
+          }
           results.push({
             userId,
             missionId: opportunity.id,
@@ -240,7 +270,7 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
         }
 
         const text = existing?.commentText
-          ? validComment(existing.commentText)
+          ? validComment(existing.commentText, opportunity)
           : validComment(
               (
                 await callClusterSeoNetwork<ClusterSeoDraft>({
@@ -248,7 +278,8 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
                   identity: networkIdentity,
                   missionId: opportunity.id,
                 })
-              ).draft
+              ).draft,
+              opportunity
             );
         const grant = await callClusterSeoNetwork<ClusterSeoGrant>({
           action: "grant",
@@ -281,7 +312,11 @@ export async function runClusterSeoWelcomeGiftAutomation(input: { forceDryRun?: 
   }
 
   return {
-    ok: !results.some((result) => result.status === "failed" || result.status === "blocked"),
+    ok: !results.some((result) =>
+      result.status === "failed" ||
+      result.status === "blocked" ||
+      result.status === "preview_blocked"
+    ),
     skipped: false,
     dryRun,
     attempted,

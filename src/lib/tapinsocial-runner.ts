@@ -116,8 +116,13 @@ export async function runTapInYouTubeRefill() {
   });
 }
 
-export async function runTapInDispatch(input: { forceDryRun?: boolean } = {}) {
-  const clusterSeoWelcomeGifts = await runClusterSeoWelcomeGiftAutomation(input);
+export async function runTapInDispatch(
+  input: { forceDryRun?: boolean; previewWelcomeGiftComments?: boolean } = {}
+) {
+  const clusterSeoWelcomeGifts = await runClusterSeoWelcomeGiftAutomation({
+    forceDryRun: input.forceDryRun,
+    previewComments: input.previewWelcomeGiftComments,
+  });
   const config = tapInRunnerConfig();
   const brandIds = await activeTapInRunnerBrandIds();
   const dryRun = config.dryRun || input.forceDryRun === true;

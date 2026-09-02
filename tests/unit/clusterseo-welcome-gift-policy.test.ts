@@ -6,10 +6,12 @@ import {
   isAutomatableClusterSeoWelcomeGift,
   normalizeAutomatedWelcomeGiftComment,
   normalizeClusterSeoTargetDomain,
+  validateAutomatedWelcomeGiftComment,
 } from "../../src/lib/clusterseo-welcome-gift-policy";
 
 const tapInUserId = "5d18d7f7-3c3d-4e49-a50d-579be182af85";
 const clusterUserId = "16bf98d0-c367-4802-95dd-d8404dd4a11b";
+const youtubeAccountId = "acct_38738ec8bcf343f0";
 
 function candidate(overrides: Record<string, string> = {}) {
   return {
@@ -31,6 +33,7 @@ test("welcome gift automation is disabled and dry by default", () => {
     enabled: false,
     dryRun: true,
     userIds: [],
+    accountIds: [],
     targetDomains: [],
     perRunCap: 1,
     configured: false,
@@ -42,12 +45,14 @@ test("welcome gift automation validates allowlists and caps each run", () => {
     CLUSTERSEO_WELCOME_GIFT_AUTOMATION_ENABLED: "true",
     CLUSTERSEO_WELCOME_GIFT_AUTOMATION_DRY_RUN: "false",
     CLUSTERSEO_WELCOME_GIFT_AUTOMATION_USER_IDS: `${tapInUserId},not-a-user,${tapInUserId}`,
+    CLUSTERSEO_WELCOME_GIFT_AUTOMATION_ACCOUNT_IDS: `${youtubeAccountId},invalid,${youtubeAccountId}`,
     CLUSTERSEO_WELCOME_GIFT_AUTOMATION_TARGET_DOMAINS: "https://www.bhuman.ai/, BHUMAN.AI",
     CLUSTERSEO_WELCOME_GIFT_AUTOMATION_PER_RUN_CAP: "20",
   });
   assert.equal(config.enabled, true);
   assert.equal(config.dryRun, false);
   assert.deepEqual(config.userIds, [tapInUserId]);
+  assert.deepEqual(config.accountIds, [youtubeAccountId]);
   assert.deepEqual(config.targetDomains, ["bhuman.ai"]);
   assert.equal(config.perRunCap, 3);
   assert.equal(config.configured, true);
@@ -99,4 +104,35 @@ test("domain and comment normalization remove presentation differences and long 
     normalizeAutomatedWelcomeGiftComment("Useful\u2014clear\n\nexample\u2013thanks."),
     "Useful-clear example-thanks."
   );
+});
+
+test("automated comments reject the exact generic YouTube boilerplate failure", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "It’s cool how YouTube lets you share original content with friends and family. Bhuman’s approach to AI videos feels more natural and less forced.",
+    opportunity: candidate({
+      targetPostTitle: "Actually human AI videos that do not look cringe | BHuman Speakeasy",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_title_context"]);
+});
+
+test("automated comments require a brand mention and a distinctive title cue", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "The practical point is making AI videos feel less cringe, not just faster. BHuman looks much closer to something a team could actually send.",
+    opportunity: candidate({
+      targetPostTitle: "Actually human AI videos that do not look cringe | BHuman Speakeasy",
+    }),
+  });
+
+  assert.deepEqual(result, {
+    text:
+      "The practical point is making AI videos feel less cringe, not just faster. BHuman looks much closer to something a team could actually send.",
+    valid: true,
+    reasons: [],
+    titleCues: ["actually", "human", "cringe", "speakeasy"],
+  });
 });

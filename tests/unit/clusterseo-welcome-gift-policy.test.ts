@@ -119,6 +119,19 @@ test("automated comments reject the exact generic YouTube boilerplate failure", 
   assert.deepEqual(result.reasons, ["generic_comment", "missing_title_context"]);
 });
 
+test("automated comments reject bland praise from the production preview", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "The walkthrough covers a solid range of features without getting overwhelming. Bhuman’s approach to simplifying complex tools feels pretty balanced here.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment"]);
+});
+
 test("automated comments require a brand mention and a distinctive title cue", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:

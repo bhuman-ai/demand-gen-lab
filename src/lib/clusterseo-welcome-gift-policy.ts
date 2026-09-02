@@ -4,6 +4,9 @@ export type ClusterSeoWelcomeGiftCandidate = {
   id: string;
   platform: string;
   actionKind: string;
+  targetPostUrl?: string;
+  targetPostTitle?: string;
+  targetBrandName?: string;
   targetBrandUserId: string;
   targetDomainToken: string;
   sourceProvider: string;
@@ -95,7 +98,10 @@ export function explainClusterSeoWelcomeGiftEligibility(input: {
   };
   return {
     missionId: opportunity.id,
+    targetBrandName: String(opportunity.targetBrandName || "").trim(),
     targetDomain,
+    targetPostTitle: String(opportunity.targetPostTitle || "").trim(),
+    targetPostUrl: String(opportunity.targetPostUrl || "").trim(),
     checks,
     eligible: Object.values(checks).every(Boolean),
   };

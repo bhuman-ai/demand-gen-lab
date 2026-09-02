@@ -16,6 +16,9 @@ function candidate(overrides: Record<string, string> = {}) {
     id: "4591bbf7-b8b4-4859-92d6-55c519f0c849",
     platform: "YOUTUBE",
     actionKind: "COMMENT",
+    targetPostUrl: "https://www.youtube.com/watch?v=example",
+    targetPostTitle: "BHuman product demo",
+    targetBrandName: "BHuman",
     targetBrandUserId: clusterUserId,
     targetDomainToken: "https://www.bhuman.ai/",
     sourceProvider: "clusterseo:welcome_youtube_gift",
@@ -75,7 +78,10 @@ test("eligibility diagnostics expose only bounded checks", () => {
     }),
     {
       missionId: "4591bbf7-b8b4-4859-92d6-55c519f0c849",
+      targetBrandName: "BHuman",
       targetDomain: "other.example",
+      targetPostTitle: "BHuman product demo",
+      targetPostUrl: "https://www.youtube.com/watch?v=example",
       checks: {
         youtubeComment: true,
         selfOwned: true,

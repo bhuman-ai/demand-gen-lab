@@ -258,6 +258,7 @@ export function validateAutomatedWelcomeGiftComment(input: {
   const hasBrandInQuestion =
     Boolean(brandName && question.toLowerCase().includes(brandName)) ||
     Boolean(domainCore && compactQuestion.includes(domainCore));
+  const hasCompoundViewerQuestion = /\band\b/i.test(question);
   const reasons: string[] = [];
 
   if (words.length < (cues.length ? 12 : 10)) reasons.push("too_short");
@@ -286,6 +287,9 @@ export function validateAutomatedWelcomeGiftComment(input: {
   if (!cues.length && !hasOpeningViewerQuestion) reasons.push("missing_opening_viewer_question");
   if (!cues.length && hasOpeningViewerQuestion && !hasSingleViewerQuestion) {
     reasons.push("not_single_viewer_question");
+  }
+  if (!cues.length && hasSingleViewerQuestion && hasCompoundViewerQuestion) {
+    reasons.push("compound_viewer_question");
   }
   if (!cues.length && hasOpeningViewerQuestion && !hasBrandInQuestion) {
     reasons.push("brand_outside_question");

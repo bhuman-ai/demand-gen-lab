@@ -40,6 +40,10 @@ const GENERIC_COMMENT_PHRASES = [
   "without overcomplicating",
   "workflow smooth",
   "kind of consistency",
+  "is interesting",
+  "the way",
+  "that would help",
+  "keep messages consistent",
   "the walkthrough of how",
   "the walkthrough shows how",
   "which matters for",
@@ -233,8 +237,8 @@ export function validateAutomatedWelcomeGiftComment(input: {
     .split(".")[0]
     ?.replace(/[^a-z0-9]/g, "") ?? "";
   const compactText = lower.replace(/[^a-z0-9]/g, "");
-  const hasNaturalQuestion =
-    text.includes("?") && /\b(?:can|could|does|do|how|is|will|would)\b/i.test(text);
+  const hasOpeningViewerQuestion =
+    /^(?:can|could|does|do|how|is|will|would)\b[^?]{5,}\?/i.test(text);
   const reasons: string[] = [];
 
   if (words.length < 12) reasons.push("too_short");
@@ -243,7 +247,7 @@ export function validateAutomatedWelcomeGiftComment(input: {
     reasons.push("generic_comment");
   }
   if (
-    !hasNaturalQuestion &&
+    !hasOpeningViewerQuestion &&
     !/\b(?:because|so|which|rather than|instead of|that means)\b/i.test(text)
   ) {
     reasons.push("missing_reason_or_implication");
@@ -260,7 +264,7 @@ export function validateAutomatedWelcomeGiftComment(input: {
   if (cues.length && !cues.some((cue) => commentTokens.has(cue))) {
     reasons.push("missing_title_context");
   }
-  if (!cues.length && !hasNaturalQuestion) reasons.push("missing_viewer_question");
+  if (!cues.length && !hasOpeningViewerQuestion) reasons.push("missing_opening_viewer_question");
 
   return { text, valid: reasons.length === 0, reasons, titleCues: cues };
 }

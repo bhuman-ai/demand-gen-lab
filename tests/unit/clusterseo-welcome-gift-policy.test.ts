@@ -263,7 +263,24 @@ test("automated comments reject a wordy marketing-style follow-up", () => {
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "wordy_or_vague_followup"]);
+  assert.deepEqual(result.reasons, [
+    "generic_comment",
+    "brand_outside_question",
+    "wordy_or_vague_followup",
+  ]);
+});
+
+test("automated comments reject a dangling brand-only third sentence", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "Can Persona take text messages and send replies on its own? Re-entering each message would get really tedious over time. BHuman",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["brand_outside_question", "wordy_or_vague_followup"]);
 });
 
 test("automated comments accept a concrete operational observation", () => {

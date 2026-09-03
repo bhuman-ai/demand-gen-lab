@@ -249,26 +249,19 @@ export function validateAutomatedWelcomeGiftComment(input: {
     ?.replace(/[^a-z0-9]/g, "") ?? "";
   const compactText = lower.replace(/[^a-z0-9]/g, "");
   const hasOpeningViewerQuestion =
-    /^(?:can|could|does|do|how|is|will|would)\b[^?]{5,}\?/i.test(text);
-  const hasConcreteFriction =
-    /\b(?:avoid|correct|lose|miss|rebuild|redo|re-enter|repeat|switch|wait)\w*/i.test(text);
+    /^(?:can|could|does|do|how|is|what|when|where|why|will|would)\b[^?]{5,}\?/i.test(text);
+  const hasSingleViewerQuestion =
+    /^(?:can|could|does|do|how|is|what|when|where|why|will|would)\b[^.!?]{5,}\?$/i.test(text);
   const questionEnd = text.indexOf("?");
   const question = questionEnd >= 0 ? text.slice(0, questionEnd + 1) : "";
   const compactQuestion = question.toLowerCase().replace(/[^a-z0-9]/g, "");
   const hasBrandInQuestion =
     Boolean(brandName && question.toLowerCase().includes(brandName)) ||
     Boolean(domainCore && compactQuestion.includes(domainCore));
-  const followup = questionEnd >= 0 ? text.slice(questionEnd + 1).trim() : "";
-  const followupWordCount = followup.split(/\s+/).filter(Boolean).length;
-  const hasPlainFollowup =
-    followupWordCount >= 5 &&
-    followupWordCount <= 14 &&
-    !/^that would\b/i.test(followup) &&
-    /^[^.!?]+[.!]?$/.test(followup);
   const reasons: string[] = [];
 
-  if (words.length < 12) reasons.push("too_short");
-  if (words.length > 40) reasons.push("too_long");
+  if (words.length < (cues.length ? 12 : 10)) reasons.push("too_short");
+  if (words.length > (cues.length || !hasSingleViewerQuestion ? 40 : 24)) reasons.push("too_long");
   if (GENERIC_COMMENT_PHRASES.some((phrase) => lower.includes(phrase))) {
     reasons.push("generic_comment");
   }
@@ -291,14 +284,11 @@ export function validateAutomatedWelcomeGiftComment(input: {
     reasons.push("missing_title_context");
   }
   if (!cues.length && !hasOpeningViewerQuestion) reasons.push("missing_opening_viewer_question");
-  if (!cues.length && hasOpeningViewerQuestion && !hasConcreteFriction) {
-    reasons.push("missing_concrete_friction");
+  if (!cues.length && hasOpeningViewerQuestion && !hasSingleViewerQuestion) {
+    reasons.push("not_single_viewer_question");
   }
   if (!cues.length && hasOpeningViewerQuestion && !hasBrandInQuestion) {
     reasons.push("brand_outside_question");
-  }
-  if (!cues.length && hasOpeningViewerQuestion && !hasPlainFollowup) {
-    reasons.push("wordy_or_vague_followup");
   }
 
   return { text, valid: reasons.length === 0, reasons, titleCues: cues };

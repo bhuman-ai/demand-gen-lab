@@ -229,7 +229,7 @@ test("automated comments reject a vague statement before an otherwise grounded q
 test("automated comments accept a grounded viewer question for a generic walkthrough title", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:
-      "Can BHuman match recipient data to the same template after a campaign starts? I would want to know before changing hundreds of personalized versions.",
+      "Can BHuman keep the same recipient data when a campaign switches templates? I would want to avoid rebuilding hundreds of personalized versions.",
     opportunity: candidate({
       targetPostTitle: "BHuman Full Platform Walkthrough",
     }),
@@ -238,6 +238,19 @@ test("automated comments accept a grounded viewer question for a generic walkthr
   assert.equal(result.valid, true);
   assert.deepEqual(result.reasons, []);
   assert.deepEqual(result.titleCues, []);
+});
+
+test("automated comments reject unsupported comparisons and vague payoff language", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "Can BHuman’s Persona handle replying to emails as quickly as it manages calls? Knowing that matters because timely email responses can really affect customer experience.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_concrete_friction"]);
 });
 
 test("automated comments accept a concrete operational observation", () => {

@@ -258,7 +258,8 @@ export function validateAutomatedWelcomeGiftComment(input: {
   const hasBrandInQuestion =
     Boolean(brandName && question.toLowerCase().includes(brandName)) ||
     Boolean(domainCore && compactQuestion.includes(domainCore));
-  const hasCompoundViewerQuestion = /\band\b/i.test(question);
+  const compoundQuestionText = question.replace(/\bback\s+and\s+forth\b/gi, "back-and-forth");
+  const hasCompoundViewerQuestion = /\band\b/i.test(compoundQuestionText);
   const reasons: string[] = [];
 
   if (words.length < (cues.length ? 12 : 10)) reasons.push("too_short");

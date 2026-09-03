@@ -50,6 +50,11 @@ const GENERIC_COMMENT_PHRASES = [
   "knowing that matters",
   "customer experience",
   "can really affect",
+  "seamlessly",
+  "juggling",
+  "that would save",
+  "a lot of time",
+  "audio calls",
   "the walkthrough of how",
   "the walkthrough shows how",
   "which matters for",
@@ -247,6 +252,14 @@ export function validateAutomatedWelcomeGiftComment(input: {
     /^(?:can|could|does|do|how|is|will|would)\b[^?]{5,}\?/i.test(text);
   const hasConcreteFriction =
     /\b(?:avoid|correct|lose|miss|rebuild|redo|re-enter|repeat|switch|wait)\w*/i.test(text);
+  const questionEnd = text.indexOf("?");
+  const followup = questionEnd >= 0 ? text.slice(questionEnd + 1).trim() : "";
+  const followupWordCount = followup.split(/\s+/).filter(Boolean).length;
+  const hasPlainFollowup =
+    followupWordCount >= 5 &&
+    followupWordCount <= 14 &&
+    !/^that would\b/i.test(followup) &&
+    !followup.includes("?");
   const reasons: string[] = [];
 
   if (words.length < 12) reasons.push("too_short");
@@ -275,6 +288,9 @@ export function validateAutomatedWelcomeGiftComment(input: {
   if (!cues.length && !hasOpeningViewerQuestion) reasons.push("missing_opening_viewer_question");
   if (!cues.length && hasOpeningViewerQuestion && !hasConcreteFriction) {
     reasons.push("missing_concrete_friction");
+  }
+  if (!cues.length && hasOpeningViewerQuestion && !hasPlainFollowup) {
+    reasons.push("wordy_or_vague_followup");
   }
 
   return { text, valid: reasons.length === 0, reasons, titleCues: cues };

@@ -136,7 +136,7 @@ test("automated comments reject bland praise from the production preview", () =>
   assert.deepEqual(result.reasons, [
     "generic_comment",
     "missing_reason_or_implication",
-    "missing_viewer_question",
+    "missing_opening_viewer_question",
   ]);
 });
 
@@ -153,7 +153,7 @@ test("automated comments reject hedged AI-style language from the revised previe
   assert.deepEqual(result.reasons, [
     "generic_comment",
     "missing_reason_or_implication",
-    "missing_viewer_question",
+    "missing_opening_viewer_question",
   ]);
 });
 
@@ -167,7 +167,7 @@ test("automated comments reject abstract reviewer language from the final previe
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_opening_viewer_question"]);
 });
 
 test("automated comments reject abstract workflow language after transcript grounding", () => {
@@ -180,7 +180,7 @@ test("automated comments reject abstract workflow language after transcript grou
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_opening_viewer_question"]);
 });
 
 test("automated comments reject generic interface language that cites no real feature", () => {
@@ -193,7 +193,7 @@ test("automated comments reject generic interface language that cites no real fe
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_opening_viewer_question"]);
 });
 
 test("automated comments reject the latest rubric-like transcript summary", () => {
@@ -206,7 +206,24 @@ test("automated comments reject the latest rubric-like transcript summary", () =
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_opening_viewer_question"]);
+});
+
+test("automated comments reject a vague statement before an otherwise grounded question", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "The way the Persona handles calls and sends emails is interesting. With BHuman, can you customize the text used for customer emails? That would help keep messages consistent.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, [
+    "generic_comment",
+    "missing_reason_or_implication",
+    "missing_opening_viewer_question",
+  ]);
 });
 
 test("automated comments accept a grounded viewer question for a generic walkthrough title", () => {

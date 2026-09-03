@@ -133,7 +133,11 @@ test("automated comments reject bland praise from the production preview", () =>
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_reason_or_implication"]);
+  assert.deepEqual(result.reasons, [
+    "generic_comment",
+    "missing_reason_or_implication",
+    "missing_viewer_question",
+  ]);
 });
 
 test("automated comments reject hedged AI-style language from the revised preview", () => {
@@ -146,7 +150,11 @@ test("automated comments reject hedged AI-style language from the revised previe
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_reason_or_implication"]);
+  assert.deepEqual(result.reasons, [
+    "generic_comment",
+    "missing_reason_or_implication",
+    "missing_viewer_question",
+  ]);
 });
 
 test("automated comments reject abstract reviewer language from the final preview", () => {
@@ -159,7 +167,7 @@ test("automated comments reject abstract reviewer language from the final previe
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
 });
 
 test("automated comments reject abstract workflow language after transcript grounding", () => {
@@ -172,7 +180,7 @@ test("automated comments reject abstract workflow language after transcript grou
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
 });
 
 test("automated comments reject generic interface language that cites no real feature", () => {
@@ -185,7 +193,34 @@ test("automated comments reject generic interface language that cites no real fe
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
+});
+
+test("automated comments reject the latest rubric-like transcript summary", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "The walkthrough of how the Persona manages email replies and takes calls shows how BHuman keeps customer communication steady, which matters for handling many conversations smoothly.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment", "missing_viewer_question"]);
+});
+
+test("automated comments accept a grounded viewer question for a generic walkthrough title", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "Can BHuman match recipient data to the same template after a campaign starts? I would want to know before changing hundreds of personalized versions.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.reasons, []);
+  assert.deepEqual(result.titleCues, []);
 });
 
 test("automated comments accept a concrete operational observation", () => {

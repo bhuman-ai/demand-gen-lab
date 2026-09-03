@@ -40,6 +40,11 @@ const GENERIC_COMMENT_PHRASES = [
   "without overcomplicating",
   "workflow smooth",
   "kind of consistency",
+  "the walkthrough of how",
+  "the walkthrough shows how",
+  "which matters for",
+  "keeps customer communication steady",
+  "handling many conversations smoothly",
 ];
 
 const TITLE_CUE_STOPWORDS = new Set([
@@ -47,14 +52,18 @@ const TITLE_CUE_STOPWORDS = new Set([
   "bhuman",
   "create",
   "creating",
+  "demo",
   "from",
   "full",
+  "overview",
   "platform",
   "the",
   "this",
+  "tutorial",
   "using",
   "video",
   "videos",
+  "walkthrough",
   "with",
   "youtube",
 ]);
@@ -224,6 +233,8 @@ export function validateAutomatedWelcomeGiftComment(input: {
     .split(".")[0]
     ?.replace(/[^a-z0-9]/g, "") ?? "";
   const compactText = lower.replace(/[^a-z0-9]/g, "");
+  const hasNaturalQuestion =
+    text.includes("?") && /\b(?:can|could|does|do|how|is|will|would)\b/i.test(text);
   const reasons: string[] = [];
 
   if (words.length < 12) reasons.push("too_short");
@@ -231,7 +242,10 @@ export function validateAutomatedWelcomeGiftComment(input: {
   if (GENERIC_COMMENT_PHRASES.some((phrase) => lower.includes(phrase))) {
     reasons.push("generic_comment");
   }
-  if (!/\b(?:because|so|which|rather than|instead of|that means)\b/i.test(text)) {
+  if (
+    !hasNaturalQuestion &&
+    !/\b(?:because|so|which|rather than|instead of|that means)\b/i.test(text)
+  ) {
     reasons.push("missing_reason_or_implication");
   }
   if (/[!\u{1F300}-\u{1FAFF}]/u.test(text)) reasons.push("hype_or_emoji");
@@ -243,9 +257,10 @@ export function validateAutomatedWelcomeGiftComment(input: {
   ) {
     reasons.push("missing_brand_mention");
   }
-  if (!cues.length || !cues.some((cue) => commentTokens.has(cue))) {
+  if (cues.length && !cues.some((cue) => commentTokens.has(cue))) {
     reasons.push("missing_title_context");
   }
+  if (!cues.length && !hasNaturalQuestion) reasons.push("missing_viewer_question");
 
   return { text, valid: reasons.length === 0, reasons, titleCues: cues };
 }

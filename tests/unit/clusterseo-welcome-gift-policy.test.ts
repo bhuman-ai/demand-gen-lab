@@ -308,6 +308,18 @@ test("automated comments reject a question that joins separate transcript featur
   assert.deepEqual(result.reasons, ["compound_viewer_question"]);
 });
 
+test("automated comments allow back and forth as one conversation concept", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value: "Can BHuman keep track of back and forth conversations within one persona?",
+    opportunity: candidate({
+      targetPostTitle: "What is Persona?",
+    }),
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.reasons, []);
+});
+
 test("automated comments accept a concrete operational observation", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:

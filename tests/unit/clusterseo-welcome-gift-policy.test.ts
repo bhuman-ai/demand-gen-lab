@@ -253,6 +253,19 @@ test("automated comments reject unsupported comparisons and vague payoff languag
   assert.deepEqual(result.reasons, ["generic_comment", "missing_concrete_friction"]);
 });
 
+test("automated comments reject a wordy marketing-style follow-up", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "Can the Persona take text from emails and then use it in audio calls seamlessly? That would save a lot of time re-entering details when juggling messages with BHuman.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["generic_comment", "wordy_or_vague_followup"]);
+});
+
 test("automated comments accept a concrete operational observation", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:

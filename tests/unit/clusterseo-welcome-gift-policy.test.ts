@@ -229,7 +229,7 @@ test("automated comments reject a vague statement before an otherwise grounded q
 test("automated comments accept a grounded viewer question for a generic walkthrough title", () => {
   const result = validateAutomatedWelcomeGiftComment({
     value:
-      "Can BHuman keep the same recipient data when a campaign switches templates? I would want to avoid rebuilding hundreds of personalized versions.",
+      "Can BHuman match recipient data to a video template before sending each personalized version?",
     opportunity: candidate({
       targetPostTitle: "BHuman Full Platform Walkthrough",
     }),
@@ -250,7 +250,7 @@ test("automated comments reject unsupported comparisons and vague payoff languag
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["generic_comment", "missing_concrete_friction"]);
+  assert.deepEqual(result.reasons, ["generic_comment", "not_single_viewer_question"]);
 });
 
 test("automated comments reject a wordy marketing-style follow-up", () => {
@@ -265,8 +265,8 @@ test("automated comments reject a wordy marketing-style follow-up", () => {
   assert.equal(result.valid, false);
   assert.deepEqual(result.reasons, [
     "generic_comment",
+    "not_single_viewer_question",
     "brand_outside_question",
-    "wordy_or_vague_followup",
   ]);
 });
 
@@ -280,7 +280,20 @@ test("automated comments reject a dangling brand-only third sentence", () => {
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.reasons, ["brand_outside_question", "wordy_or_vague_followup"]);
+  assert.deepEqual(result.reasons, ["not_single_viewer_question", "brand_outside_question"]);
+});
+
+test("automated comments reject an invented friction sentence after a grounded question", () => {
+  const result = validateAutomatedWelcomeGiftComment({
+    value:
+      "Does BHuman’s Persona manage email and reply to emails automatically? Re-entering message details every time would slow things down a lot.",
+    opportunity: candidate({
+      targetPostTitle: "BHuman Full Platform Walkthrough",
+    }),
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasons, ["not_single_viewer_question"]);
 });
 
 test("automated comments accept a concrete operational observation", () => {

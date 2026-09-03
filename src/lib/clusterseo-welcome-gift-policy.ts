@@ -44,6 +44,12 @@ const GENERIC_COMMENT_PHRASES = [
   "the way",
   "that would help",
   "keep messages consistent",
+  "as quickly as",
+  "as fast as",
+  "faster than",
+  "knowing that matters",
+  "customer experience",
+  "can really affect",
   "the walkthrough of how",
   "the walkthrough shows how",
   "which matters for",
@@ -239,6 +245,8 @@ export function validateAutomatedWelcomeGiftComment(input: {
   const compactText = lower.replace(/[^a-z0-9]/g, "");
   const hasOpeningViewerQuestion =
     /^(?:can|could|does|do|how|is|will|would)\b[^?]{5,}\?/i.test(text);
+  const hasConcreteFriction =
+    /\b(?:avoid|correct|lose|miss|rebuild|redo|re-enter|repeat|switch|wait)\w*/i.test(text);
   const reasons: string[] = [];
 
   if (words.length < 12) reasons.push("too_short");
@@ -265,6 +273,9 @@ export function validateAutomatedWelcomeGiftComment(input: {
     reasons.push("missing_title_context");
   }
   if (!cues.length && !hasOpeningViewerQuestion) reasons.push("missing_opening_viewer_question");
+  if (!cues.length && hasOpeningViewerQuestion && !hasConcreteFriction) {
+    reasons.push("missing_concrete_friction");
+  }
 
   return { text, valid: reasons.length === 0, reasons, titleCues: cues };
 }
